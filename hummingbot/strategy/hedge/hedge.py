@@ -1,5 +1,6 @@
 import logging
 from decimal import Decimal
+from enum import Enum
 from typing import Any, Dict, List, Tuple, Union
 
 import pandas as pd
@@ -18,6 +19,13 @@ from hummingbot.strategy.strategy_py_base import StrategyPyBase
 from hummingbot.strategy.utils import order_age
 
 hedge_logger = None
+
+
+class ThresholdStatus(Enum):
+    RUNNING = 0
+    WAITING_FOR_ENTRY = 1
+    WAITING_FOR_REENTRY = 2
+    DISABLED = 3
 
 
 class HedgeStrategy(StrategyPyBase):
@@ -90,14 +98,34 @@ class HedgeStrategy(StrategyPyBase):
         self._status_messages = []
         self._last_report_timestamp = {}
         self._enable_auto_set_position_mode = enable_auto_set_position_mode
+        self._entry_thresholds = config_map.entry_thresholds
+        self._top_exit_thresholds = config_map.top_exit_thresholds
+        self._bottom_exit_thresholds = config_map.bottom_exit_thresholds
+        self._threshold_status = ThresholdStatus.DISABLED
+
         if config_map.value_mode:
             self.hedge = self.hedge_by_value
             self._hedge_market_pair = hedge_market_pairs[0]
+            self._entry_threshold = self._entry_thresholds[0]
+            self._top_exit_threshold = self._top_exit_thresholds[0]
+            self._bottom_exit_threshold = self._bottom_exit_thresholds[0]
+            if (
+                self._entry_threshold != Decimal(0)
+                or self._top_exit_threshold != Decimal(0)
+                or self._bottom_exit_threshold != Decimal(0)
+            ):
+                self._threshold_status = ThresholdStatus.WAITING_FOR_ENTRY
+                if self._top_exit_threshold <= self._entry_threshold:
+                    raise ValueError("Top exit threshold must be greater than entry threshold")
+                if self._bottom_exit_threshold >= self._entry_threshold:
+                    raise ValueError("Bottom exit threshold must be less than entry threshold")
             self.logger().info(f"Hedge market pair: {self._hedge_market_pair}")
         else:
             self.hedge = self.hedge_by_amount
             self._market_pair_by_asset = self.get_market_pair_by_asset()
             self.logger().info(f"Market pair by asset: {self._market_pair_by_asset}")
+            if sum(self._entry_thresholds) != Decimal(0) or sum(self._exit_thresholds) != Decimal(0):
+                self.logger().warning("Thresholds are ignored in amount mode")
 
         derivative_markets = AllConnectorSettings.get_derivative_names()
         self._derivatives_list = [
@@ -120,7 +148,8 @@ class HedgeStrategy(StrategyPyBase):
         self.logger().info(f"Market pairs: {self._market_pairs}")
         return {
             hedge_pair: [
-                market_pair for market_pair in self._market_pairs
+                market_pair
+                for market_pair in self._market_pairs
                 if market_pair.trading_pair.split("-")[0] == hedge_pair.trading_pair.split("-")[0]
             ]
             for hedge_pair in self._hedge_market_pairs
@@ -194,6 +223,7 @@ class HedgeStrategy(StrategyPyBase):
         """
         Format the status of the strategy.
         """
+
         def get_wallet_status_str() -> List[str]:
             wallet_df = self.wallet_balance_data_frame(self._all_markets)
             return ["", "  Wallet:"] + ["    " + line for line in str(wallet_df).split("\n")]
@@ -221,11 +251,18 @@ class HedgeStrategy(StrategyPyBase):
                 return []
 
             lines = []
-            total_value = sum(self.get_base_value(market_pair) for market_pair in self._market_pairs)
+            total_value = self.get_total_base_value()
             hedge_value = self.get_base_value(self._hedge_market_pair)
             is_buy, value_to_hedge = self.get_hedge_direction_and_value()
             price, amount = self.calculate_hedge_price_and_amount(is_buy, value_to_hedge)
-            lines.extend(["", f"   Mode: Value, Total value: {total_value:.6g}, Hedge value: {hedge_value:.6g}"])
+            lines.extend(
+                [
+                    "",
+                    f"   Mode: Value, Total value: {total_value:.6g}, Hedge value: {hedge_value:.6g}",
+                    "",
+                    f"   Threshold Status: {self._threshold_status.name}",
+                ]
+            )
             if amount > 0:
                 lines.extend(
                     [
@@ -247,16 +284,20 @@ class HedgeStrategy(StrategyPyBase):
                 total_amount = sum(self.get_base_amount(market_pair) for market_pair in market_list)
                 hedge_amount = self.get_base_amount(hedge_market)
                 net_amount = total_amount * self._hedge_ratio + hedge_amount
-                data.append([
-                    hedge_market_name,
-                    asset,
-                    total_amount,
-                    hedge_amount,
-                    net_amount,
-                    market_names,
-                ])
+                data.append(
+                    [
+                        hedge_market_name,
+                        asset,
+                        total_amount,
+                        hedge_amount,
+                        net_amount,
+                        market_names,
+                    ]
+                )
 
-            df = pd.DataFrame(data=data, columns=["Hedge Market", "Asset", "Total Amount", "Hedge Amount", "Net Amount", "Markets"])
+            df = pd.DataFrame(
+                data=data, columns=["Hedge Market", "Asset", "Total Amount", "Hedge Amount", "Net Amount", "Markets"]
+            )
             lines.extend(["    " + line for line in str(df).split("\n")])
             return lines
 
@@ -307,7 +348,8 @@ class HedgeStrategy(StrategyPyBase):
             f"Please ensure that the position mode on {self._hedge_market_pairs[0].market.name} "
             f"is set to {position_mode}. "
             f"The bot will try to automatically set position mode to {position_mode}. "
-            f"You may ignore the message if the position mode is already set to {position_mode}.")
+            f"You may ignore the message if the position mode is already set to {position_mode}."
+        )
         self.notify_hb_app(msg)
         self.logger().warning(msg)
         for market_pair in self._hedge_market_pairs:
@@ -413,17 +455,76 @@ class HedgeStrategy(StrategyPyBase):
         base_price = market_pair.get_mid_price()
         return base_amount * base_price
 
+    def get_total_base_value(self) -> Decimal:
+        """
+        Get the total base value of all market pairs.
+
+        :returns: The total base value of all market pairs.
+        """
+        return sum(self.get_base_value(market_pair) for market_pair in self._market_pairs) or Decimal(0)
+
+    def get_threshold_hedge_direction_and_value(self) -> Tuple[bool, Decimal]:
+        # reset status if waiting for entry and total value is below entry threshold
+        total_value = self.get_total_base_value()
+        hedge_value = self.get_base_value(self._hedge_market_pair)
+        net_value = total_value * self._hedge_ratio + hedge_value
+        if self._threshold_status == ThresholdStatus.WAITING_FOR_REENTRY:
+            if abs(total_value) < self._entry_threshold:
+                self.logger().info(
+                    f"Total value {total_value} is below entry threshold {self._entry_threshold}. "
+                    f"Resetting threshold status to waiting for entry."
+                )
+                self._threshold_status = ThresholdStatus.WAITING_FOR_ENTRY
+            if hedge_value > 0:
+                return False, hedge_value
+            return True, abs(hedge_value)
+        # exit all hedge positions if total value is above exit threshold
+        if abs(total_value) > self._top_exit_threshold:
+            self.logger().info(
+                f"Total value {total_value} and hedge value {hedge_value} "
+                f"are both above exit threshold {self._top_exit_threshold}. Closing all open hedge position."
+            )
+            self._threshold_status = ThresholdStatus.WAITING_FOR_REENTRY
+            if hedge_value > 0:
+                return False, hedge_value
+            return True, abs(hedge_value)
+        if abs(total_value) < self._bottom_exit_threshold:
+            self.logger().info(
+                f"Total value {total_value} and hedge value {hedge_value} "
+                f"are both below exit threshold {self._bottom_exit_threshold}. Closing all open hedge position."
+            )
+            self._threshold_status = ThresholdStatus.WAITING_FOR_ENTRY
+            if hedge_value > 0:
+                return True, hedge_value
+            return False, abs(hedge_value)
+        # hedge if total value is above entry threshold and threshold_status is running
+        if abs(total_value) > self._entry_threshold and self._threshold_status == ThresholdStatus.WAITING_FOR_ENTRY:
+            self._threshold_status = ThresholdStatus.RUNNING
+
+        if self._threshold_status in [ThresholdStatus.RUNNING]:
+            self.logger().debug(
+                f"Total value {total_value} and hedge value {hedge_value} "
+                f"are both above entry threshold {self._entry_threshold}."
+            )
+            is_buy = net_value < 0
+            value_to_hedge = abs(net_value)
+            return is_buy, value_to_hedge
+
+        return False, Decimal(0)
+
     def get_hedge_direction_and_value(self) -> Tuple[bool, Decimal]:
         """
         Calculate the value that is required to be hedged.
         :returns: A tuple of the hedge direction (buy/sell) and the value to be hedged.
         """
-        total_value = sum(self.get_base_value(market_pair) for market_pair in self._market_pairs)
-        hedge_value = self.get_base_value(self._hedge_market_pair)
-        net_value = total_value * self._hedge_ratio + hedge_value
-        is_buy = net_value < 0
-        value_to_hedge = abs(net_value)
-        return is_buy, value_to_hedge
+        if self._threshold_status == ThresholdStatus.DISABLED:
+            total_value = self.get_total_base_value()
+            hedge_value = self.get_base_value(self._hedge_market_pair)
+            net_value = total_value * self._hedge_ratio + hedge_value
+            is_buy = net_value < 0
+            value_to_hedge = abs(net_value)
+            return is_buy, value_to_hedge
+        return self.get_threshold_hedge_direction_and_value()
 
     def get_slippage_ratio(self, is_buy: bool) -> Decimal:
         """
@@ -444,8 +545,12 @@ class HedgeStrategy(StrategyPyBase):
         amount = value_to_hedge / price
         price = price * self.get_slippage_ratio(is_buy)
         trading_pair = self._hedge_market_pair.trading_pair
-        quantized_price = self._hedge_market_pair.market.quantize_order_price(trading_pair, price)
-        quantized_amount = self._hedge_market_pair.market.quantize_order_amount(trading_pair, amount)
+        quantized_price = (
+            self._hedge_market_pair.market.quantize_order_price(trading_pair, price) if price else Decimal("0")
+        )
+        quantized_amount = (
+            self._hedge_market_pair.market.quantize_order_amount(trading_pair, amount) if amount else Decimal("0")
+        )
         return quantized_price, quantized_amount
 
     def hedge_by_value(self) -> None:
@@ -488,7 +593,9 @@ class HedgeStrategy(StrategyPyBase):
         net_amount = total_amount * self._hedge_ratio + hedge_amount
         is_buy = net_amount < 0
         amount_to_hedge = abs(net_amount)
-        self.logger().debug("Hedge direction: %s, amount to hedge: %s net amount: %s", is_buy, amount_to_hedge, net_amount)
+        self.logger().debug(
+            "Hedge direction: %s, amount to hedge: %s net amount: %s", is_buy, amount_to_hedge, net_amount
+        )
         return is_buy, amount_to_hedge
 
     def hedge_by_amount(self) -> None:
@@ -507,11 +614,17 @@ class HedgeStrategy(StrategyPyBase):
             price = hedge_market.get_mid_price() * self.get_slippage_ratio(is_buy)
             self.logger().info(
                 "Hedge by amount. Mid price: %s Hedge direction: %s. Hedge price: %s. Hedge amount: %s",
-                hedge_market.get_mid_price(), is_buy, price, amount_to_hedge
+                hedge_market.get_mid_price(),
+                is_buy,
+                price,
+                amount_to_hedge,
             )
             order_candidates = self.get_order_candidates(hedge_market, is_buy, amount_to_hedge, price)
             if not order_candidates:
-                self.logger().info("Difference in hedge_amount found but no order candidates for %s is available. “This is either due to insufficient balance to perform hedge or min trade size not reached or minimum exchange trade size not met", asset)
+                self.logger().info(
+                    "Difference in hedge_amount found but no order candidates for %s is available. “This is either due to insufficient balance to perform hedge or min trade size not reached or minimum exchange trade size not met",
+                    asset,
+                )
                 self._status_messages.append(f"No order candidates for {asset}.")
                 continue
             self.place_orders(hedge_market, order_candidates)
@@ -525,9 +638,17 @@ class HedgeStrategy(StrategyPyBase):
         returns the order candidate if the order meets the accepted criteria
         else, return None
         """
-        self.logger().info("Checking perpetual order candidates for %s %s %s %s", market_pair, "buy" if is_buy else "sell", amount, price)
+        self.logger().info(
+            "Checking perpetual order candidates for %s %s %s %s",
+            market_pair,
+            "buy" if is_buy else "sell",
+            amount,
+            price,
+        )
 
-        def get_closing_order_candidate(is_buy: bool, amount: Decimal, price: Decimal) -> Union[PerpetualOrderCandidate, None]:
+        def get_closing_order_candidate(
+            is_buy: bool, amount: Decimal, price: Decimal
+        ) -> Union[PerpetualOrderCandidate, None]:
             opp_position_side = PositionSide.SHORT if is_buy else PositionSide.LONG
             opp_position_list = self.get_positions(market_pair, opp_position_side)
             # opp_position_list should only have 1 position
@@ -549,7 +670,9 @@ class HedgeStrategy(StrategyPyBase):
 
         budget_checker = market_pair.market.budget_checker
         if amount * price < self._min_trade_size:
-            self.logger().info("trade value (%s) is less than min trade size. (%s)", amount * price, self._min_trade_size)
+            self.logger().info(
+                "trade value (%s) is less than min trade size. (%s)", amount * price, self._min_trade_size
+            )
             return []
         order_candidates = []
         if self._position_mode == PositionMode.HEDGE:
@@ -584,7 +707,9 @@ class HedgeStrategy(StrategyPyBase):
         """
         budget_checker = market_pair.market.budget_checker
         if amount * price < self._min_trade_size:
-            self.logger().info("trade value (%s) is less than min trade size. (%s)", amount * price, self._min_trade_size)
+            self.logger().info(
+                "trade value (%s) is less than min trade size. (%s)", amount * price, self._min_trade_size
+            )
             return []
         order_candidate = OrderCandidate(
             trading_pair=market_pair.trading_pair,
