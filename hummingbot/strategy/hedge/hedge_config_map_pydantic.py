@@ -119,10 +119,26 @@ market_config_map = Union[EmptyMarketConfigMap, MarketConfigMap]
 class HedgeConfigMap(BaseStrategyConfigMap):
     strategy: str = Field(default="hedge", client_data=None)
     value_mode: bool = Field(
-        default=True,
+        default="y",
         description="Whether to hedge based on value or amount",
         client_data=ClientFieldData(
             prompt=lambda mi: "Do you want to hedge by asset value [y] or asset amount[n] (y/n)?",
+            prompt_on_new=True,
+        ),
+    )
+    hedge_connector: ExchangeEnum = Field(
+        default=...,
+        description="The name of the hedge exchange connector.",
+        client_data=ClientFieldData(
+            prompt=lambda mi: "Enter name of the exchange to hedge overall assets",
+            prompt_on_new=True,
+        ),
+    )
+    hedge_markets: List[str] = Field(
+        default=...,
+        description="The name of the trading pair.",
+        client_data=ClientFieldData(
+            prompt=lambda mi: HedgeConfigMap.hedge_markets_prompt(mi),
             prompt_on_new=True,
         ),
     )
@@ -147,7 +163,7 @@ class HedgeConfigMap(BaseStrategyConfigMap):
         description="The minimum trade size in quote asset.",
         ge=0,
         client_data=ClientFieldData(
-            prompt=lambda mi: "Enter the minimum trade size in quote asset",
+            prompt=lambda mi: f"Enter the minimum trade size in {mi.hedge_markets[0].split('-')[1]}",
             prompt_on_new=True,
         ),
     )
@@ -159,22 +175,7 @@ class HedgeConfigMap(BaseStrategyConfigMap):
             prompt_on_new=True,
         ),
     )
-    hedge_connector: ExchangeEnum = Field(
-        default=...,
-        description="The name of the hedge exchange connector.",
-        client_data=ClientFieldData(
-            prompt=lambda mi: "Enter name of the exchange to hedge overall assets",
-            prompt_on_new=True,
-        ),
-    )
-    hedge_markets: List[str] = Field(
-        default=...,
-        description="The name of the trading pair.",
-        client_data=ClientFieldData(
-            prompt=lambda mi: HedgeConfigMap.hedge_markets_prompt(mi),
-            prompt_on_new=True,
-        ),
-    )
+
     hedge_offsets: List[Decimal] = Field(
         default=Decimal("0.0"),
         description="The offsets for each trading pair.",
@@ -199,13 +200,37 @@ class HedgeConfigMap(BaseStrategyConfigMap):
             prompt_on_new=True,
         ),
     )
+    entry_thresholds: List[Decimal] = Field(
+        default=Decimal("0.0"),
+        description="The entry threshold for each trading pair or overall asset.",
+        client_data=ClientFieldData(
+            prompt=lambda mi: HedgeConfigMap.thresholds_prompt(mi, "to enter hedge"),
+            prompt_on_new=True,
+        ),
+    )
+    top_exit_thresholds: List[Decimal] = Field(
+        default=Decimal("0.0"),
+        description="The exit threshold for each trading pair or overall asset.",
+        client_data=ClientFieldData(
+            prompt=lambda mi: HedgeConfigMap.thresholds_prompt(mi, "to exit hedge when it is above this threshold"),
+            prompt_on_new=True,
+        ),
+    )
+    bottom_exit_thresholds: List[Decimal] = Field(
+        default=Decimal("0.0"),
+        description="The exit threshold for each trading pair or overall asset.",
+        client_data=ClientFieldData(
+            prompt=lambda mi: HedgeConfigMap.thresholds_prompt(mi, "to exit hedge when it is below this threshold"),
+            prompt_on_new=True,
+        ),
+    )
     enable_auto_set_position_mode: bool = Field(
         default=False,
         description="Whether to automatically set the exchange position mode to one-way or hedge based  ratio.",
         client_data=ClientFieldData(
             prompt=lambda mi: "Do you want to automatically set the exchange position mode to one-way or hedge [y/n]?",
             prompt_on_new=False,
-        )
+        ),
     )
     connector_0: market_config_map = get_field(0)
     connector_1: market_config_map = get_field(1)
@@ -251,15 +276,29 @@ class HedgeConfigMap(BaseStrategyConfigMap):
             raise ValueError("Only one market can be used for value mode")
         return markets
 
+    @validator("entry_thresholds", "top_exit_thresholds", "bottom_exit_thresholds", pre=True)
+    def validate_threshold(cls, thresholds: Union[str, Decimal, List[Decimal]]):
+        """checks and ensure entry_threshold is of decimal type"""
+        if isinstance(thresholds, str):
+            thresholds = [Decimal(x) for x in thresholds.split(",")]
+        if isinstance(thresholds, Decimal):
+            thresholds = [thresholds]
+        for threshold in thresholds:
+            if validate_decimal(threshold, min_value=Decimal("0")):
+                return validate_decimal(threshold)
+        return thresholds
+
     @staticmethod
     def hedge_markets_prompt(mi: "HedgeConfigMap") -> str:
         """prompts for the markets to hedge"""
         exchange = mi.hedge_connector
         if mi.value_mode:
             return f"Value mode: Enter the trading pair you would like to hedge on {exchange}. (Example: BTC-USDT)"
-        return f"Amount mode: Enter the list of trading pair you would like to hedge on {exchange}. comma seperated. \
-            (Example: BTC-USDT,ETH-USDT) Only markets with the same base as the hedge markets will be hedged." \
-                "WARNING: currently only supports hedging of base assets."
+        return (
+            f"Amount mode: Enter the list of trading pair you would like to hedge on {exchange}. comma seperated. \
+            (Example: BTC-USDT,ETH-USDT) Only markets with the same base as the hedge markets will be hedged."
+            "WARNING: currently only supports hedging of base assets."
+        )
 
     @staticmethod
     def hedge_offsets_prompt(mi: "HedgeConfigMap") -> str:
@@ -273,3 +312,14 @@ class HedgeConfigMap(BaseStrategyConfigMap):
             "(Example: 0.1,-0.2 = +0.1BTC,-0.2ETH, 0LTC will be offset for the exchange amount "
             "if markets is BTC-USDT,ETH-USDT,LTC-USDT)"
         )
+
+    @staticmethod
+    def thresholds_prompt(mi: "HedgeConfigMap", suffix: str = "") -> str:
+        """prompts for the threshold"""
+        if mi.value_mode:
+            return (
+                f"Enter the threshold for the value of the hedge market {suffix}"
+                f" (Example: 10 = 10{mi.hedge_markets[0].split('-')[1]})"
+                " Set as 0 to disable."
+            )
+        return "This option is not yet available for amount mode. Please set as 0. "
