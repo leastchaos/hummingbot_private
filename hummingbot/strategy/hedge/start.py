@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from hummingbot.strategy.hedge.hedge import HedgeStrategy
 from hummingbot.strategy.hedge.hedge_config_map_pydantic import MAX_CONNECTOR, HedgeConfigMap
 from hummingbot.strategy.market_trading_pair_tuple import MarketTradingPairTuple
@@ -7,7 +9,8 @@ def start(self):
     c_map: HedgeConfigMap = self.strategy_config_map
     hedge_connector = c_map.hedge_connector.lower()
     hedge_markets = c_map.hedge_markets
-    hedge_offsets = c_map.hedge_offsets
+    # hedge_offsets = c_map.hedge_offsets
+    hedge_offsets = [Decimal("0")]
     offsets_dict = {hedge_connector: hedge_offsets}
     initialize_markets = [(hedge_connector, hedge_markets)]
     for i in range(MAX_CONNECTOR):
