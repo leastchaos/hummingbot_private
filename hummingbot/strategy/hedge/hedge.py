@@ -86,9 +86,11 @@ class HedgeStrategy(StrategyPyBase):
         self._leverage = config_map.hedge_leverage
         self._position_mode = PositionMode.ONEWAY if config_map.hedge_position_mode == "ONEWAY" else PositionMode.HEDGE
         self._slippage = config_map.slippage
-        self._min_trade_size = config_map.min_trade_size
+        # self._min_trade_size = config_map.min_trade_size
+        self._min_trade_size = Decimal(0)
         self._hedge_interval = config_map.hedge_interval
-        self._value_mode = config_map.value_mode
+        # self._value_mode = config_map.value_mode
+        self._value_mode = True
         self._offsets = offsets
         self._status_report_interval = status_report_interval
         self._all_markets = self._hedge_market_pairs + self._market_pairs
@@ -103,7 +105,7 @@ class HedgeStrategy(StrategyPyBase):
         self._bottom_exit_thresholds = config_map.bottom_exit_thresholds
         self._threshold_status = ThresholdStatus.DISABLED
 
-        if config_map.value_mode:
+        if self._value_mode:
             self.hedge = self.hedge_by_value
             self._hedge_market_pair = hedge_market_pairs[0]
             self._entry_threshold = self._entry_thresholds[0]
