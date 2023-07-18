@@ -117,9 +117,9 @@ class HedgeStrategy(StrategyPyBase):
                 or self._bottom_exit_threshold != Decimal(0)
             ):
                 self._threshold_status = ThresholdStatus.WAITING_FOR_ENTRY
-                if self._top_exit_threshold <= self._entry_threshold:
+                if self._top_exit_threshold <= self._entry_threshold and self._top_exit_threshold != Decimal(0):
                     raise ValueError("Top exit threshold must be greater than entry threshold")
-                if self._bottom_exit_threshold >= self._entry_threshold:
+                if self._bottom_exit_threshold >= self._entry_threshold and self._bottom_exit_threshold != Decimal(0):
                     raise ValueError("Bottom exit threshold must be less than entry threshold")
             self.logger().info(f"Hedge market pair: {self._hedge_market_pair}")
         else:
@@ -481,7 +481,7 @@ class HedgeStrategy(StrategyPyBase):
                 return False, hedge_value
             return True, abs(hedge_value)
         # exit all hedge positions if total value is above exit threshold
-        if abs(total_value) > self._top_exit_threshold:
+        if abs(total_value) > self._top_exit_threshold and self._top_exit_threshold > 0:
             self.logger().info(
                 f"Total value {total_value} and hedge value {hedge_value} "
                 f"are both above exit threshold {self._top_exit_threshold}. Closing all open hedge position."
@@ -490,7 +490,7 @@ class HedgeStrategy(StrategyPyBase):
             if hedge_value > 0:
                 return False, hedge_value
             return True, abs(hedge_value)
-        if abs(total_value) < self._bottom_exit_threshold:
+        if abs(total_value) < self._bottom_exit_threshold and self._bottom_exit_threshold > 0:
             self.logger().info(
                 f"Total value {total_value} and hedge value {hedge_value} "
                 f"are both below exit threshold {self._bottom_exit_threshold}. Closing all open hedge position."
