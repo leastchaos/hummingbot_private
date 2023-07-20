@@ -118,14 +118,14 @@ market_config_map = Union[EmptyMarketConfigMap, MarketConfigMap]
 
 class HedgeConfigMap(BaseStrategyConfigMap):
     strategy: str = Field(default="hedge", client_data=None)
-    # value_mode: bool = Field(
-    #     default="y",
-    #     description="Whether to hedge based on value or amount",
-    #     client_data=ClientFieldData(
-    #         prompt=lambda mi: "Do you want to hedge by asset value [y] or asset amount[n] (y/n)?",
-    #         prompt_on_new=True,
-    #     ),
-    # )
+    value_mode: bool = Field(
+        default="y",
+        description="Whether to hedge based on value or amount",
+        client_data=ClientFieldData(
+            prompt=lambda mi: "Do you want to hedge by asset value [y] or asset amount[n] (y/n)?",
+            prompt_on_new=True,
+        ),
+    )
     hedge_connector: ExchangeEnum = Field(
         default=...,
         description="The name of the hedge exchange connector.",
@@ -293,35 +293,38 @@ class HedgeConfigMap(BaseStrategyConfigMap):
     def hedge_markets_prompt(mi: "HedgeConfigMap") -> str:
         """prompts for the markets to hedge"""
         exchange = mi.hedge_connector
-        # if mi.value_mode:
-        if True:
+        if mi.value_mode:
             return f"Value mode: Enter the trading pair you would like to hedge on {exchange}. (Example: BTC-USDT)"
-        # return (
-        #     f"Amount mode: Enter the list of trading pair you would like to hedge on {exchange}. comma seperated. \
-        #     (Example: BTC-USDT,ETH-USDT) Only markets with the same base as the hedge markets will be hedged."
-        #     "WARNING: currently only supports hedging of base assets."
-        # )
+        return (
+            f"Amount mode: Enter the list of trading pair you would like to hedge on {exchange}. comma seperated. \
+            (Example: BTC-USDT,ETH-USDT) Only markets with the same base as the hedge markets will be hedged."
+            "WARNING: currently only supports hedging of base assets."
+        )
 
     @staticmethod
     def hedge_offsets_prompt(mi: "HedgeConfigMap") -> str:
         """prompts for the markets to hedge"""
-        # if mi.value_mode:
-        trading_pair = mi.hedge_markets[0]
-        base = trading_pair.split("-")[0]
-        return f"Enter the offset for {base}. (Example: 0.1 = +0.1{base} used in calculation of hedged value)"
-        # return (
-        #     "Enter the offsets to use to hedge the markets comma seperated. "
-        #     "(Example: 0.1,-0.2 = +0.1BTC,-0.2ETH, 0LTC will be offset for the exchange amount "
-        #     "if markets is BTC-USDT,ETH-USDT,LTC-USDT)"
-        # )
+        if mi.value_mode:
+            trading_pair = mi.hedge_markets[0]
+            base = trading_pair.split("-")[0]
+            return f"Enter the offset for {base}. (Example: 0.1 = +0.1{base} used in calculation of hedged value)"
+        return (
+            "Enter the offsets to use to hedge the markets comma seperated. "
+            "(Example: 0.1,-0.2 = +0.1BTC,-0.2ETH, 0LTC will be offset for the exchange amount "
+            "if markets is BTC-USDT,ETH-USDT,LTC-USDT)"
+        )
 
     @staticmethod
     def thresholds_prompt(mi: "HedgeConfigMap", suffix: str = "") -> str:
         """prompts for the threshold"""
-        # if mi.value_mode:
+        if mi.value_mode:
+            return (
+                f"Enter the threshold for the value of the hedge market {suffix}"
+                f" (Example: 10 = 10{mi.hedge_markets[0].split('-')[1]})"
+                " Set as 0 to disable."
+            )
         return (
-            f"Enter the threshold for the value of the hedge market {suffix}"
-            f" (Example: 10 = 10{mi.hedge_markets[0].split('-')[1]})"
+            f"Enter the thresholds for the amount of the hedge markets {suffix}"
+            f" (Example: 0.1 = 0.1{mi.hedge_markets[0].split('-')[0]})"
             " Set as 0 to disable."
         )
-        # return "This option is not yet available for amount mode. Please set as 0. "
