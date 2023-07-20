@@ -678,6 +678,12 @@ class HedgeStrategy(StrategyPyBase):
         if abs(total_amount) < bottom_exit_threshold and bottom_exit_threshold > 0:
             if abs(hedge_amount) == Decimal(0):
                 return False, Decimal(0)
+            self.logger().info(
+                f"Total amount {total_amount} and hedge amount {hedge_amount} "
+                f"are both below exit threshold {bottom_exit_threshold}. "
+                "Closing all open hedge position."
+            )
+
             self._threshold_statuses[hedge_pair] = ThresholdStatus.WAITING_FOR_ENTRY
             if hedge_amount > 0:
                 return False, hedge_amount
