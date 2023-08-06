@@ -18,8 +18,11 @@ from hummingbot.core.data_type.common import (
     OrderType,
     PriceType,
     TradeType,
-    PositionMode
+    PositionMode,
+    PositionSide,
+    PositionAction
 )
+from hummingbot.core.utils.estimate_fee import build_perpetual_trade_fee
 from hummingbot.core.data_type.limit_order cimport LimitOrder
 from hummingbot.core.data_type.limit_order import LimitOrder
 from hummingbot.core.network_iterator import NetworkStatus
@@ -362,6 +365,10 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
     def hanging_orders_tracker(self):
         return self._hanging_orders_tracker
 
+    @property
+    def exchange_name(self):
+        return self._config_map.exchange
+
     def update_from_config_map(self):
         self.get_config_map_execution_mode()
         self.get_config_map_hanging_orders()
@@ -449,16 +456,38 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
             self._ticks_to_be_ready = 0
 
     def get_base_available_amount(self) -> Decimal:
-        return self.market_info.market.get_available_balance(self.market_info.base_asset)
-    
+        """
+        Get the value of the derivative base asset.
+        :param market_pair: The market pair to get the value of the derivative base asset.
+        :return: The value of the derivative base asset.
+        """
+        active_base_orders = self.active_sells
+        sell_amount = sum([order.quantity for order in active_base_orders])
+        return self.get_base_amount() - sell_amount
+
+
     def get_quote_available_amount(self) -> Decimal:
-        return self.market_info.market.get_available_balance(self.market_info.quote_asset)
+        return self.market_info.market.get_available_balance(self.market_info.quote_asset) * self.leverage
 
     def get_base_amount(self) -> Decimal:
-        return self.market_info.market.get_balance(self.market_info.base_asset)
-    
+        trading_pair = self.trading_pair
+        positions: List[Position] = [
+            position
+            for position in self.market_info.market.account_positions.values()
+            if not isinstance(position, PositionMode) and position.trading_pair == trading_pair
+        ]
+        amount = 0
+
+        for position in positions:
+            if position.position_side in [PositionSide.LONG, PositionSide.BOTH]:
+                amount += position.amount
+            if position.position_side == PositionSide.SHORT:
+                amount -= abs(position.amount)
+        return amount
+
     def get_quote_amount(self) -> Decimal:
-        return self.market_info.market.get_balance(self.market_info.quote_asset)
+        # this need to use available balance because the USDT balance is treated as the total balance including the base
+        return self.market_info.market.get_available_balance(self.market_info.quote_asset) * self.leverage
     
     def pure_mm_assets_df(self, to_show_current_pct: bool) -> pd.DataFrame:
         market, trading_pair, base_asset, quote_asset = self._market_info
@@ -541,6 +570,40 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
                 round(self._optimal_spread, 5),
             ])
         return pd.DataFrame(data=markets_data, columns=markets_columns).replace(np.nan, '', regex=True)
+    def get_positions(self) -> List[Position]:
+        """
+        Get the active positions of a market.
+        :param market_pair: Market pair to get the positions of.
+        :return: The active positions of the market.
+        """
+        trading_pair = self.trading_pair
+        positions: List[Position] = [
+            position
+            for position in self.market_info.market.account_positions.values()
+            if not isinstance(position, PositionMode) and position.trading_pair == trading_pair
+        ]
+        return positions
+
+    def active_positions_df(self) -> pd.DataFrame:
+        """
+        Get the active positions of all markets.
+        :return: The active positions of all markets.
+        """
+        columns = ["Symbol", "Type", "Entry", "Amount", "Leverage"]
+        data = []
+        for position in self.get_positions():
+            if not position:
+                continue
+            data.append(
+                [
+                    position.trading_pair,
+                    position.position_side.name,
+                    position.entry_price,
+                    position.amount,
+                    position.leverage,
+                ]
+            )
+        return pd.DataFrame(data=data, columns=columns)
 
     def format_status(self) -> str:
         if not self._all_markets_ready:
@@ -566,6 +629,12 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
         else:
             lines.extend(["", "  No active maker orders."])
 
+        # See if there are any open positions.
+        if len(self.get_positions()) > 0:
+            df = self.active_positions_df()
+            lines.extend(["", "  Positions:"] + ["    " + line for line in df.to_string(index=False).split("\n")])
+        else:
+            lines.extend(["", "  No active positions."])
         volatility_pct = self._avg_vol.current_value / float(self.get_price()) * 100.0
         if all((self.gamma, self._alpha, self._kappa, not isnan(volatility_pct))):
             lines.extend(["", f"  Strategy parameters:",
@@ -751,7 +820,7 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
             return
 
         q_target = Decimal(str(self.c_calculate_target_inventory()))
-        q = (market.get_balance(self.base_asset) - q_target) / (inventory)
+        q = (self.get_base_amount() - q_target) / (inventory)
         # Volatility has to be in absolute values (prices) because in calculation of reservation price it's not multiplied by the current price, therefore
         # it can't be a percentage. The result of the multiplication has to be an absolute price value because it's being subtracted from the current price
         vol = self.get_volatility()
@@ -1017,9 +1086,17 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
         base_balance, quote_balance = self.adjusted_available_balance_for_orders_budget_constrain()
 
         for buy in proposal.buys:
-            # buy_fee = market.c_get_fee(self.base_asset, self.quote_asset, OrderType.LIMIT, TradeType.BUY,
-            #                            buy.size, buy.price)
-            quote_size = buy.size * buy.price# * (Decimal(1) + buy_fee.percent)
+            buy_fee = build_perpetual_trade_fee(
+                self.exchange_name,
+                True,
+                PositionAction.OPEN,
+                self.base_asset, 
+                self.quote_asset,
+                self._limit_order_type,
+                TradeType.BUY,
+                buy.size,
+                buy.price)
+            quote_size = buy.size * buy.price * (Decimal(1) + buy_fee.percent)
 
             # Adjust buy order size to use remaining balance if less than the order amount
             if quote_balance < quote_size:
@@ -1123,7 +1200,7 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
                 return
 
             q_target = Decimal(str(self.c_calculate_target_inventory()))
-            q = (market.get_balance(self.base_asset) - q_target) / (inventory)
+            q = (self.get_base_amount() - q_target) / (inventory)
 
             if len(proposal.buys) > 0:
                 if q > 0:
@@ -1145,14 +1222,29 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
         cdef:
             ExchangeBase market = self._market_info.market
         for buy in proposal.buys:
-            # fee = market.c_get_fee(self.base_asset, self.quote_asset,
-            #                        self._limit_order_type, TradeType.BUY, buy.size, buy.price)
-            price = buy.price * (Decimal(1))# - fee.percent)
+            fee = build_perpetual_trade_fee(
+                self.exchange_name,
+                True,
+                PositionAction.OPEN,
+                self.base_asset, 
+                self.quote_asset,
+                self._limit_order_type,
+                TradeType.BUY,
+                buy.size,
+                buy.price)
+
+            price = buy.price * (Decimal(1) - fee.percent)
             buy.price = market.c_quantize_order_price(self.trading_pair, price)
         for sell in proposal.sells:
-            # fee = market.c_get_fee(self.base_asset, self.quote_asset,
-            #                        self._limit_order_type, TradeType.SELL, sell.size, sell.price)
-            price = sell.price * (Decimal(1))# + fee.percent)
+            fee = build_perpetual_trade_fee(
+                self.exchange_name,
+                True,
+                PositionAction.OPEN,
+                self.base_asset, 
+                self.quote_asset,
+                self._limit_order_type,
+                TradeType.SELL, sell.size, sell.price)
+            price = sell.price * (Decimal(1) + fee.percent)
             sell.price = market.c_quantize_order_price(self.trading_pair, price)
 
     def apply_add_transaction_costs(self, proposal: Proposal):
@@ -1419,7 +1511,7 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
                             self._optimal_ask,
                             (mid_price - (self._reservation_price - self._optimal_spread / 2)) / mid_price,
                             ((self._reservation_price + self._optimal_spread / 2) - mid_price) / mid_price,
-                            market.get_balance(self.base_asset),
+                            self.get_base_amount(),
                             self.c_calculate_target_inventory(),
                             time_left_fraction,
                             self._avg_vol.current_value,
