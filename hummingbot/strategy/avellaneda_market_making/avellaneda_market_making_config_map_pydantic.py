@@ -1,19 +1,20 @@
 from datetime import datetime, time
 from decimal import Decimal
-from typing import Dict, Optional, Union
+from typing import Dict, Literal, Optional, Union
 
 from pydantic import Field, root_validator, validator
 
-from hummingbot.client.config.config_data_types import BaseClientModel, ClientFieldData
+from hummingbot.client.config.config_data_types import BaseClientModel, ClientConfigEnum, ClientFieldData
 from hummingbot.client.config.config_validators import (
     validate_bool,
     validate_datetime_iso_string,
     validate_decimal,
+    validate_derivative,
     validate_int,
     validate_time_iso_string,
 )
 from hummingbot.client.config.strategy_config_data_types import BaseTradingStrategyConfigMap
-from hummingbot.client.settings import required_exchanges
+from hummingbot.client.settings import AllConnectorSettings, required_exchanges
 from hummingbot.connector.utils import split_hb_trading_pair
 
 
@@ -172,7 +173,45 @@ HANGING_ORDER_MODELS = {
 }
 
 
-class AvellanedaMarketMakingConfigMap(BaseTradingStrategyConfigMap):
+class PerpTradingStrategyConfigMap(BaseTradingStrategyConfigMap):
+    exchange: ClientConfigEnum(  # rebuild the exchanges enum
+        value="Exchanges",  # noqa: F821
+        names={e: e for e in sorted(AllConnectorSettings.get_derivative_names())},
+        type=str,
+    ) = Field(
+        default=...,
+        description="The name of the exchange connector.",
+        client_data=ClientFieldData(
+            prompt=lambda mi: "Input your maker derivative connector",
+            prompt_on_new=True,
+        ),
+    )
+    leverage: int = Field(
+        default=1,
+        description="The leverage to use for the market.",
+        client_data=ClientFieldData(
+            prompt=lambda mi: "Enter the leverage to use",
+            prompt_on_new=True,
+        ),
+    )
+    position_mode: Literal["ONEWAY", "HEDGE"] = Field(
+        default="ONEWAY",
+        description="The position mode to use for the market.",
+        client_data=ClientFieldData(
+            prompt=lambda mi: "Enter the position mode to use for the market",
+            prompt_on_new=True,
+        ),
+    )
+
+    @validator("exchange", pre=True)
+    def validate_exchange(cls, v: str) -> Optional[str]:
+        ret = validate_derivative(v)
+        if ret is not None:
+            raise ValueError(ret)
+        return v
+
+
+class AvellanedaMarketMakingConfigMap(PerpTradingStrategyConfigMap):
     strategy: str = Field(default="avellaneda_market_making", client_data=None)
     execution_timeframe_mode: Union[InfiniteModel, FromDateToDateModel, DailyBetweenTimesModel] = Field(
         default=...,

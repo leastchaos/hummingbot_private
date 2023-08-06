@@ -41,6 +41,7 @@ __pycache__
 /test/**/*.cpp
 /build
 
+
 # Local files
 **/.DS_Store
 portfolio_value.csv
@@ -48,6 +49,8 @@ portfolio_value.csv
 /data
 debug.log
 /installation/docker-commands/hummingbot_files
+/hummingbot_files/conf
+*.sqlite
 
 # Distribution files
 /build

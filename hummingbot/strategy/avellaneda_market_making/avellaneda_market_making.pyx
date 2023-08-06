@@ -17,7 +17,8 @@ from hummingbot.client.config.config_helpers import ClientConfigAdapter
 from hummingbot.core.data_type.common import (
     OrderType,
     PriceType,
-    TradeType
+    TradeType,
+    PositionMode
 )
 from hummingbot.core.data_type.limit_order cimport LimitOrder
 from hummingbot.core.data_type.limit_order import LimitOrder
@@ -302,6 +303,18 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
     def end_time(self, value):
         self._end_time = value
 
+    @property
+    def leverage(self) -> int:
+        return self._config_map.leverage
+    
+    @property
+    def position_mode(self) -> PositionMode:
+        if self._config_map.position_mode == "HEDGE":
+            return PositionMode.HEDGE
+        elif self._config_map.position_mode == "ONEWAY":
+            return PositionMode.ONEWAY
+        raise ValueError(f"Invalid position mode {self._config_map.position_mode}")
+
     def get_price(self) -> float:
         return self.get_mid_price()
 
@@ -435,13 +448,25 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
         if self._ticks_to_be_ready < 0:
             self._ticks_to_be_ready = 0
 
+    def get_base_available_amount(self) -> Decimal:
+        return self.market_info.market.get_available_balance(self.market_info.base_asset)
+    
+    def get_quote_available_amount(self) -> Decimal:
+        return self.market_info.market.get_available_balance(self.market_info.quote_asset)
+
+    def get_base_amount(self) -> Decimal:
+        return self.market_info.market.get_balance(self.market_info.base_asset)
+    
+    def get_quote_amount(self) -> Decimal:
+        return self.market_info.market.get_balance(self.market_info.quote_asset)
+    
     def pure_mm_assets_df(self, to_show_current_pct: bool) -> pd.DataFrame:
         market, trading_pair, base_asset, quote_asset = self._market_info
         price = self._price_delegate.get_price_by_type(PriceType.MidPrice)
-        base_balance = float(market.get_balance(base_asset))
-        quote_balance = float(market.get_balance(quote_asset))
-        available_base_balance = float(market.get_available_balance(base_asset))
-        available_quote_balance = float(market.get_available_balance(quote_asset))
+        base_balance = float(self.get_base_amount())
+        quote_balance = float(self.get_quote_amount())
+        available_base_balance = float(self.get_base_available_amount())
+        available_quote_balance = float(self.get_quote_available_amount())
         base_value = base_balance * float(price)
         total_in_quote = base_value + quote_balance
         base_ratio = base_value / total_in_quote if total_in_quote > 0 else 0
@@ -582,6 +607,8 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
                     self._hanging_orders_tracker.add_as_hanging_order(order)
 
         self._execution_state.time_left = self._execution_state.closing_time
+        self.market_info.market.set_leverage(self.trading_pair, self.leverage)
+        self.market_info.market.set_position_mode(self.position_mode)
 
     def start(self, clock: Clock, timestamp: float):
         self.c_start(clock, timestamp)
@@ -675,8 +702,8 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
         self._avg_vol.add_sample(price)
         self._trading_intensity.calculate(timestamp)
         # Calculate adjustment factor to have 0.01% of inventory resolution
-        base_balance = market.get_balance(base_asset)
-        quote_balance = market.get_balance(quote_asset)
+        base_balance = self.get_base_amount()
+        quote_balance = self.get_quote_amount()
         inventory_in_base = quote_balance / price + base_balance
 
     def collect_market_variables(self, timestamp: float):
@@ -791,8 +818,8 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
             object target_inventory_value
 
         price = self.get_price()
-        base_asset_amount = market.get_balance(base_asset)
-        quote_asset_amount = market.get_balance(quote_asset)
+        base_asset_amount = self.get_base_amount()
+        quote_asset_amount = self.get_quote_amount()
         # Base asset value in quote asset prices
         base_value = base_asset_amount * price
         # Total inventory value in quote asset prices
@@ -818,8 +845,8 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
             object inventory_value_base
 
         price = self.get_price()
-        base_asset_amount = market.get_balance(base_asset)
-        quote_asset_amount = market.get_balance(quote_asset)
+        base_asset_amount = self.get_base_amount()
+        quote_asset_amount = self.get_quote_amount()
         # Base asset value in quote asset prices
         base_value = base_asset_amount * price
         # Total inventory value in quote asset prices
@@ -943,8 +970,8 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
         """
         cdef:
             ExchangeBase market = self._market_info.market
-            object base_balance = market.c_get_available_balance(self.base_asset)
-            object quote_balance = market.c_get_available_balance(self.quote_asset)
+            object base_balance = self.get_base_available_amount()
+            object quote_balance = self.get_quote_available_amount()
 
         for order in orders:
             if order.is_buy:
@@ -990,13 +1017,13 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
         base_balance, quote_balance = self.adjusted_available_balance_for_orders_budget_constrain()
 
         for buy in proposal.buys:
-            buy_fee = market.c_get_fee(self.base_asset, self.quote_asset, OrderType.LIMIT, TradeType.BUY,
-                                       buy.size, buy.price)
-            quote_size = buy.size * buy.price * (Decimal(1) + buy_fee.percent)
+            # buy_fee = market.c_get_fee(self.base_asset, self.quote_asset, OrderType.LIMIT, TradeType.BUY,
+            #                            buy.size, buy.price)
+            quote_size = buy.size * buy.price# * (Decimal(1) + buy_fee.percent)
 
             # Adjust buy order size to use remaining balance if less than the order amount
             if quote_balance < quote_size:
-                adjusted_amount = quote_balance / (buy.price * (Decimal("1") + buy_fee.percent))
+                adjusted_amount = quote_balance / (buy.price)# * (Decimal("1") + buy_fee.percent))
                 adjusted_amount = market.c_quantize_order_amount(self.trading_pair, adjusted_amount)
                 buy.size = adjusted_amount
                 quote_balance = s_decimal_zero
@@ -1118,14 +1145,14 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
         cdef:
             ExchangeBase market = self._market_info.market
         for buy in proposal.buys:
-            fee = market.c_get_fee(self.base_asset, self.quote_asset,
-                                   self._limit_order_type, TradeType.BUY, buy.size, buy.price)
-            price = buy.price * (Decimal(1) - fee.percent)
+            # fee = market.c_get_fee(self.base_asset, self.quote_asset,
+            #                        self._limit_order_type, TradeType.BUY, buy.size, buy.price)
+            price = buy.price * (Decimal(1))# - fee.percent)
             buy.price = market.c_quantize_order_price(self.trading_pair, price)
         for sell in proposal.sells:
-            fee = market.c_get_fee(self.base_asset, self.quote_asset,
-                                   self._limit_order_type, TradeType.SELL, sell.size, sell.price)
-            price = sell.price * (Decimal(1) + fee.percent)
+            # fee = market.c_get_fee(self.base_asset, self.quote_asset,
+            #                        self._limit_order_type, TradeType.SELL, sell.size, sell.price)
+            price = sell.price * (Decimal(1))# + fee.percent)
             sell.price = market.c_quantize_order_price(self.trading_pair, price)
 
     def apply_add_transaction_costs(self, proposal: Proposal):
