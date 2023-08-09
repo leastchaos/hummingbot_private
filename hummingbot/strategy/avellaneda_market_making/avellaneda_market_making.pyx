@@ -481,8 +481,9 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
         for position in positions:
             if position.position_side in [PositionSide.LONG, PositionSide.BOTH]:
                 amount += position.amount
-            if position.position_side == PositionSide.SHORT:
-                amount -= abs(position.amount)
+            # ignore short position
+            # if position.position_side == PositionSide.SHORT:
+            #     amount -= abs(position.amount)
         return amount
 
     def get_quote_amount(self) -> Decimal:
@@ -1239,7 +1240,7 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
             fee = build_perpetual_trade_fee(
                 self.exchange_name,
                 True,
-                PositionAction.OPEN,
+                PositionAction.CLOSE,
                 self.base_asset, 
                 self.quote_asset,
                 self._limit_order_type,
@@ -1410,7 +1411,8 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
                     buy.size,
                     order_type=self._limit_order_type,
                     price=buy.price,
-                    expiration_seconds=expiration_seconds
+                    expiration_seconds=expiration_seconds,
+                    position_action=PositionAction.OPEN,
                 )
                 orders_created = True
                 if idx < number_of_pairs:
@@ -1427,13 +1429,15 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
                     f"({self.trading_pair}) Creating {len(proposal.sells)} ask "
                     f"orders at (Size, Price): {price_quote_str}"
                 )
+            position_action = PositionAction.CLOSE if self._position_mode == PositionMode.HEDGE else PositionAction.OPEN
             for idx, sell in enumerate(proposal.sells):
                 ask_order_id = self.c_sell_with_specific_market(
                     self._market_info,
                     sell.size,
                     order_type=self._limit_order_type,
                     price=sell.price,
-                    expiration_seconds=expiration_seconds
+                    expiration_seconds=expiration_seconds,
+                    position_action=position_action,
                 )
                 orders_created = True
                 if idx < number_of_pairs:
