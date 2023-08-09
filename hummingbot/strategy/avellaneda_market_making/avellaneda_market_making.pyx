@@ -1429,7 +1429,7 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
                     f"({self.trading_pair}) Creating {len(proposal.sells)} ask "
                     f"orders at (Size, Price): {price_quote_str}"
                 )
-            position_action = PositionAction.CLOSE if self._position_mode == PositionMode.HEDGE else PositionAction.OPEN
+            position_action = PositionAction.CLOSE if self.position_mode == PositionMode.HEDGE else PositionAction.OPEN
             for idx, sell in enumerate(proposal.sells):
                 ask_order_id = self.c_sell_with_specific_market(
                     self._market_info,
