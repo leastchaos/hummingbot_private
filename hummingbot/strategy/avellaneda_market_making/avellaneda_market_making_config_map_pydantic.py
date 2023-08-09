@@ -196,7 +196,7 @@ class PerpTradingStrategyConfigMap(BaseTradingStrategyConfigMap):
     )
     position_mode: Literal["ONEWAY", "HEDGE"] = Field(
         default="ONEWAY",
-        description="The position mode to use for the market.",
+        description="The position mode to use for the market. [ONEWAY, HEDGE]",
         client_data=ClientFieldData(
             prompt=lambda mi: "Enter the position mode to use for the market",
             prompt_on_new=True,
@@ -208,6 +208,12 @@ class PerpTradingStrategyConfigMap(BaseTradingStrategyConfigMap):
         ret = validate_derivative(v)
         if ret is not None:
             raise ValueError(ret)
+        return v
+
+    @validator("position_mode", pre=True)
+    def validate_position_mode(cls, v: str) -> Optional[str]:
+        if v not in ["ONEWAY", "HEDGE"]:
+            raise ValueError("Invalid position mode")
         return v
 
 
