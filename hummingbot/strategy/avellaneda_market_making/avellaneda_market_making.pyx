@@ -466,8 +466,28 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
         return self.get_base_amount() - sell_amount
 
 
+    def get_binance_perp_quote_available_amount(self) -> Decimal:
+        """Due to available balance bug for binance_perpetual, we need to use total balance, position and open orders to calculate available amount"""
+        trading_pair = self.trading_pair
+        amount = self.get_quote_amount()
+        positions: List[Position] = [
+            position
+            for position in self.market_info.market.account_positions.values()
+            if not isinstance(position, PositionMode) and position.trading_pair == trading_pair
+        ]
+        for position in positions:
+            if position.position_side in [PositionSide.LONG, PositionSide.BOTH]:
+                amount -= position.amount * position.entry_price
+
+        for order in self.active_buys:
+            amount -= order.quantity * order.price
+        return amount
     def get_quote_available_amount(self) -> Decimal:
+        """Due to available balance bug for binance_perpetual, we need to use total balance, position and open orders to calculate available amount"""
+        if self.exchange_name == "binance_perpetual":
+            return self.get_binance_perp_quote_available_amount()
         return self.market_info.market.get_available_balance(self.market_info.quote_asset) * self.leverage
+
 
     def get_base_amount(self) -> Decimal:
         trading_pair = self.trading_pair
@@ -481,14 +501,14 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
         for position in positions:
             if position.position_side in [PositionSide.LONG, PositionSide.BOTH]:
                 amount += position.amount
-            # ignore short position
+            # ignore short position as it is not considered for this strategy
             # if position.position_side == PositionSide.SHORT:
             #     amount -= abs(position.amount)
         return amount
 
     def get_quote_amount(self) -> Decimal:
         # this need to use available balance because the USDT balance is treated as the total balance including the base
-        return self.market_info.market.get_available_balance(self.market_info.quote_asset) * self.leverage
+        return self.market_info.market.get_balance(self.market_info.quote_asset) * self.leverage
     
     def pure_mm_assets_df(self, to_show_current_pct: bool) -> pd.DataFrame:
         market, trading_pair, base_asset, quote_asset = self._market_info
