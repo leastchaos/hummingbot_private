@@ -43,7 +43,7 @@ class BinancePerpetualDerivative(PerpetualDerivativePyBase):
     web_utils = web_utils
     SHORT_POLL_INTERVAL = 5.0
     UPDATE_ORDER_STATUS_MIN_INTERVAL = 10.0
-    LONG_POLL_INTERVAL = 120.0
+    LONG_POLL_INTERVAL = 5.0
 
     def __init__(
             self,
@@ -435,6 +435,25 @@ class BinancePerpetualDerivative(PerpetualDerivativePyBase):
                 )
 
                 self._order_tracker.process_order_update(order_update)
+
+            # # update available balance when orders created or canceled
+            # # update available when orders filled is not required because the balance is updated in the balance update
+            # quantity = Decimal(order_message.get("q", "0"))
+            # price = Decimal(order_message.get("p", "0"))
+            # side = order_message.get("S", "BUY")
+            # position_side = order_message.get("ps", "LONG")
+            # is_close = (side == "BUY" and position_side == "SHORT") or (side == "SELL" and position_side == "LONG")
+            # symbol = order_message.get("s", None)
+            # quote_asset = tracked_order.quote_asset if tracked_order else symbol[-4:]
+            # # update available balance when new orders created
+            # if order_message.get("X") == "NEW":
+            #     if not is_close:
+            #         self._account_available_balances[quote_asset] -= quantity * price
+
+            # # update available balance when orders canceled
+            # if order_message.get("X") == "CANCELED":
+            #     if not is_close:
+            #         self._account_available_balances[quote_asset] += quantity * price
 
         elif event_type == "ACCOUNT_UPDATE":
             update_data = event_message.get("a", {})

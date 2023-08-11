@@ -484,8 +484,9 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
         return amount
     def get_quote_available_amount(self) -> Decimal:
         """Due to available balance bug for binance_perpetual, we need to use total balance, position and open orders to calculate available amount"""
-        if self.exchange_name == "binance_perpetual":
-            return self.get_binance_perp_quote_available_amount()
+        # if self.exchange_name == "binance_perpetual":
+        #     return self.get_binance_perp_quote_available_amount()
+        
         return self.market_info.market.get_available_balance(self.market_info.quote_asset) * self.leverage
 
 
@@ -507,7 +508,6 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
         return amount
 
     def get_quote_amount(self) -> Decimal:
-        # this need to use available balance because the USDT balance is treated as the total balance including the base
         return self.market_info.market.get_balance(self.market_info.quote_asset) * self.leverage
     
     def pure_mm_assets_df(self, to_show_current_pct: bool) -> pd.DataFrame:
