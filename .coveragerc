@@ -32,6 +32,7 @@ omit =
         hummingbot/connector/mock*
         hummingbot/strategy/*/start.py
         hummingbot/strategy/dev*
+        hummingbot/strategy/avallenda_perp/*
         hummingbot/user/user_balances.py
 dynamic_context = test_function
 branch = true

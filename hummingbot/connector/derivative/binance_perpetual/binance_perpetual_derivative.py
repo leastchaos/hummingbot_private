@@ -43,7 +43,7 @@ class BinancePerpetualDerivative(PerpetualDerivativePyBase):
     web_utils = web_utils
     SHORT_POLL_INTERVAL = 5.0
     UPDATE_ORDER_STATUS_MIN_INTERVAL = 10.0
-    LONG_POLL_INTERVAL = 120.0
+    LONG_POLL_INTERVAL = 2.0
 
     def __init__(
             self,
