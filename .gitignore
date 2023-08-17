@@ -48,6 +48,8 @@ portfolio_value.csv
 /data
 debug.log
 /installation/docker-commands/hummingbot_files
+/hummingbot_files/conf
+*.sqlite
 
 # Distribution files
 /build
