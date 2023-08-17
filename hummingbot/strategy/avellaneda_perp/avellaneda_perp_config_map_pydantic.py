@@ -217,8 +217,8 @@ class PerpTradingStrategyConfigMap(BaseTradingStrategyConfigMap):
         return v
 
 
-class AvellanedaMarketMakingConfigMap(PerpTradingStrategyConfigMap):
-    strategy: str = Field(default="avellaneda_market_making", client_data=None)
+class AvellanedaPerpConfigMap(PerpTradingStrategyConfigMap):
+    strategy: str = Field(default="avellaneda_perp", client_data=None)
     execution_timeframe_mode: Union[InfiniteModel, FromDateToDateModel, DailyBetweenTimesModel] = Field(
         default=...,
         description="The execution timeframe.",
@@ -232,7 +232,7 @@ class AvellanedaMarketMakingConfigMap(PerpTradingStrategyConfigMap):
         description="The strategy order amount.",
         gt=0,
         client_data=ClientFieldData(
-            prompt=lambda mi: AvellanedaMarketMakingConfigMap.order_amount_prompt(mi),
+            prompt=lambda mi: AvellanedaPerpConfigMap.order_amount_prompt(mi),
             prompt_on_new=True,
         )
     )
@@ -389,12 +389,12 @@ class AvellanedaMarketMakingConfigMap(PerpTradingStrategyConfigMap):
     )
 
     class Config:
-        title = "avellaneda_market_making"
+        title = "avellaneda_perp"
 
     # === prompts ===
 
     @classmethod
-    def order_amount_prompt(cls, model_instance: 'AvellanedaMarketMakingConfigMap') -> str:
+    def order_amount_prompt(cls, model_instance: 'AvellanedaPerpConfigMap') -> str:
         trading_pair = model_instance.market
         base_asset, quote_asset = split_hb_trading_pair(trading_pair)
         return f"What is the amount of {base_asset} per order?"

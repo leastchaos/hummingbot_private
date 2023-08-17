@@ -5,7 +5,7 @@ from hummingbot.strategy.__utils__.trailing_indicators.trading_intensity cimport
 from hummingbot.strategy.strategy_base cimport StrategyBase
 
 
-cdef class AvellanedaMarketMakingStrategy(StrategyBase):
+cdef class AvellanedaPerpStrategy(StrategyBase):
     cdef:
         object _config_map
         object _market_info

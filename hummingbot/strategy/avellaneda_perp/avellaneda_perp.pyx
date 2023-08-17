@@ -29,8 +29,8 @@ from hummingbot.core.network_iterator import NetworkStatus
 from hummingbot.core.utils import map_df_to_str
 from hummingbot.strategy.__utils__.trailing_indicators.instant_volatility import InstantVolatilityIndicator
 from hummingbot.strategy.__utils__.trailing_indicators.trading_intensity import TradingIntensityIndicator
-from hummingbot.strategy.avellaneda_market_making.avellaneda_market_making_config_map_pydantic import (
-    AvellanedaMarketMakingConfigMap,
+from hummingbot.strategy.avellaneda_perp.avellaneda_perp_config_map_pydantic import (
+    AvellanedaPerpConfigMap,
     DailyBetweenTimesModel,
     FromDateToDateModel,
     MultiOrderLevelModel,
@@ -61,7 +61,7 @@ s_decimal_one = Decimal(1)
 pmm_logger = None
 
 
-cdef class AvellanedaMarketMakingStrategy(StrategyBase):
+cdef class AvellanedaPerpStrategy(StrategyBase):
     OPTION_LOG_CREATE_ORDER = 1 << 3
     OPTION_LOG_MAKER_ORDER_FILLED = 1 << 4
     OPTION_LOG_STATUS_REPORT = 1 << 5
@@ -75,7 +75,7 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
         return pmm_logger
 
     def init_params(self,
-                    config_map: Union[AvellanedaMarketMakingConfigMap, ClientConfigAdapter],
+                    config_map: Union[AvellanedaPerpConfigMap, ClientConfigAdapter],
                     market_info: MarketTradingPairTuple,
                     logging_options: int = OPTION_LOG_ALL,
                     status_report_interval: float = 900,

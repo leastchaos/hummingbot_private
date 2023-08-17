@@ -5,7 +5,7 @@ import pandas as pd
 
 from hummingbot import data_path
 from hummingbot.client.hummingbot_application import HummingbotApplication
-from hummingbot.strategy.avellaneda_market_making import AvellanedaMarketMakingStrategy
+from hummingbot.strategy.avellaneda_perp import AvellanedaPerpStrategy
 from hummingbot.strategy.market_trading_pair_tuple import MarketTradingPairTuple
 
 
@@ -22,13 +22,13 @@ def start(self):
         maker_data = [self.markets[exchange], trading_pair] + list(maker_assets)
         self.market_trading_pair_tuples = [MarketTradingPairTuple(*maker_data)]
 
-        strategy_logging_options = AvellanedaMarketMakingStrategy.OPTION_LOG_ALL
+        strategy_logging_options = AvellanedaPerpStrategy.OPTION_LOG_ALL
 
         debug_csv_path = os.path.join(data_path(),
                                       HummingbotApplication.main_application().strategy_file_name.rsplit('.', 1)[0] +
                                       f"_{pd.Timestamp.now().strftime('%Y-%m-%d_%H-%M-%S')}.csv")
 
-        self.strategy = AvellanedaMarketMakingStrategy()
+        self.strategy = AvellanedaPerpStrategy()
         self.strategy.init_params(
             config_map=c_map,
             market_info=MarketTradingPairTuple(*maker_data),
