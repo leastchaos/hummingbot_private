@@ -194,6 +194,14 @@ class PerpTradingStrategyConfigMap(BaseTradingStrategyConfigMap):
             prompt_on_new=True,
         ),
     )
+    direction: Literal["LONG", "SHORT", "BOTH"] = Field(
+        default="BOTH",
+        description="The direction to use for the market. [LONG, SHORT, BOTH]",
+        client_data=ClientFieldData(
+            prompt=lambda mi: "Enter the direction to use for the market, LONG, SHORT or BOTH",
+            prompt_on_new=True,
+        ),
+    )
     position_mode: Literal["ONEWAY", "HEDGE"] = Field(
         default="ONEWAY",
         description="The position mode to use for the market. [ONEWAY, HEDGE]",
