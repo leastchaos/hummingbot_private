@@ -494,7 +494,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
             if not isinstance(position, PositionMode) and position.trading_pair == trading_pair
         ]
         if self.direction == Direction.SHORT:
-            return sum([
+            return -sum([
                 position.amount
                 for position in positions
                 if position.position_side == PositionSide.SHORT
@@ -661,7 +661,8 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
                           f"    risk_factor(\u03B3)= {self.gamma:.5E}",
                           f"    order_book_intensity_factor(\u0391)= {self._alpha:.5E}",
                           f"    order_book_depth_factor(\u03BA)= {self._kappa:.5E}",
-                          f"    volatility= {volatility_pct:.3f}%"])
+                          f"    volatility= {volatility_pct:.3f}%"]
+                          )
             if self._execution_state.time_left is not None:
                 lines.extend([f"    time until end of trading cycle = {str(datetime.timedelta(seconds=float(self._execution_state.time_left)//1e3))}"])
             else:
@@ -697,6 +698,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
 
         self._execution_state.time_left = self._execution_state.closing_time
         self.market_info.market.set_leverage(self.trading_pair, self.leverage)
+        self.logger().info("Setting position mode to %s" % self.position_mode)
         self.market_info.market.set_position_mode(self.position_mode)
 
     def start(self, clock: Clock, timestamp: float):
@@ -909,9 +911,9 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
 
         price = self.get_price()
         base_asset_amount = self.get_base_amount()
-        quote_asset_amount = self.get_quote_amount()
         # Base asset value in quote asset prices
         base_value = base_asset_amount * price
+        quote_asset_amount = self.get_quote_amount()
         # Total inventory value in quote asset prices
         inventory_value = base_value + quote_asset_amount
         # Target base asset value in quote asset prices
@@ -1053,27 +1055,6 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
     def create_base_proposal(self):
         return self.c_create_base_proposal()
 
-    cdef tuple c_get_adjusted_available_balance(self, list orders):
-        """
-        Calculates the available balance, plus the amount attributed to orders.
-        :return: (base amount, quote amount) in Decimal
-        """
-        cdef:
-            ExchangeBase market = self._market_info.market
-            object base_balance = self.get_base_available_amount()
-            object quote_balance = self.get_quote_available_amount()
-
-        for order in orders:
-            if order.is_buy:
-                quote_balance += order.quantity * order.price
-            else:
-                base_balance += order.quantity
-
-        return base_balance, quote_balance
-
-    def get_adjusted_available_balance(self, orders: List[LimitOrder]):
-        return self.c_get_adjusted_available_balance(orders)
-
     cdef c_apply_order_price_modifiers(self, object proposal):
         if self._config_map.order_optimization_enabled:
             self.c_apply_order_optimization(proposal)
@@ -1097,6 +1078,8 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
 
         is_maker = True
         position_close = self.get_position_action(TradeType.BUY) == PositionAction.CLOSE
+        if position_close and self.direction == Direction.LONG:
+            proposal.buys = []
         order_candidates.extend(
             [
                 PerpetualOrderCandidate(
