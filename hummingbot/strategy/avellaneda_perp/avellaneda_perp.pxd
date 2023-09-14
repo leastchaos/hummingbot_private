@@ -78,3 +78,4 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
     cdef object c_calculate_target_inventory(self)
     cdef object c_calculate_inventory(self)
     cdef c_did_complete_order(self, object order_completed_event)
+    cdef object c_get_q_ratio(self)
