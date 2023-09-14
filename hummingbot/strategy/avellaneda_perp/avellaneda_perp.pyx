@@ -1060,8 +1060,9 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
     def get_position_close_limit(self, side: TradeType) -> Decimal:
         if side == TradeType.BUY:
             # get only the amount of the position that is in the direction of the trade to be closed
-            return self.get_base_amount()
-        return -self.get_base_amount()
+            # position close for buy is for short side, hence the negative sign
+            return -self.get_base_amount()
+        return self.get_base_amount()
 
     def create_order_candidates_for_budget_check(self, proposal: Proposal):
         order_candidates = []
@@ -1070,6 +1071,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         position_close = self.get_position_action(TradeType.BUY) == PositionAction.CLOSE
         if position_close:
             max_size = self.get_position_close_limit(TradeType.BUY)
+            print(f"max_size: {max_size} position side: {TradeType.BUY}")
             for buy in proposal.buys:
                 if buy.size > max_size:
                     buy.size = max_size
@@ -1094,6 +1096,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         position_close = self.get_position_action(TradeType.SELL) == PositionAction.CLOSE
         if position_close:
             max_size = self.get_position_close_limit(TradeType.SELL)
+            print(f"max_size: {max_size} position side: {TradeType.SELL}")
             for sell in proposal.sells:
                 if sell.size > max_size:
                     sell.size = max_size
