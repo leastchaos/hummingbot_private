@@ -326,9 +326,9 @@ class AvellanedaPerpConfigMap(PerpTradingStrategyConfigMap):
         ),
     )
     inventory_target_base_pct: Decimal = Field(
-        default=Decimal("50"),
+        default=Decimal("0"),
         description="Defines the inventory target for the base asset.",
-        ge=0,
+        ge=-100,
         le=100,
         client_data=ClientFieldData(
             prompt=lambda mi: "What is the inventory target for the base asset? Enter 50 for 50%",
@@ -513,7 +513,7 @@ class AvellanedaPerpConfigMap(PerpTradingStrategyConfigMap):
     @validator("inventory_target_base_pct", pre=True)
     def validate_pct_inclusive(cls, v: str):
         """Used for client-friendly error output."""
-        ret = validate_decimal(v, min_value=Decimal("0"), max_value=Decimal("100"), inclusive=True)
+        ret = validate_decimal(v, min_value=Decimal("-100"), max_value=Decimal("100"), inclusive=True)
         if ret is not None:
             raise ValueError(ret)
         return v
