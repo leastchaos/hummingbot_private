@@ -478,9 +478,8 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         :param market_pair: The market pair to get the value of the derivative base asset.
         :return: The value of the derivative base asset.
         """
-        active_base_orders = self.active_sells
-        sell_amount = sum([order.quantity for order in active_base_orders])
-        return self.get_base_amount() - sell_amount
+        # for future, available amount to sell depends on quote balance
+        return self.get_quote_available_amount() / self.get_price()
 
     def get_quote_available_amount(self) -> Decimal:
         return self.market_info.market.get_available_balance(self.market_info.quote_asset) * self.leverage
@@ -494,11 +493,16 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
             if not isinstance(position, PositionMode) and position.trading_pair == trading_pair
         ]
         if self.direction == Direction.SHORT:
-            return -sum([
+            both_sum = sum([
                 position.amount
                 for position in positions
-                if position.position_side == PositionSide.SHORT
-            ])
+                if position.position_side == PositionSide.BOTH])
+            short_sum = - sum([
+                    position.amount
+                    for position in positions
+                    if position.position_side == PositionSide.SHORT
+                ])
+            return both_sum + short_sum
         return sum([
             position.amount
             for position in positions
@@ -1053,14 +1057,25 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
             return PositionAction.OPEN if side == TradeType.SELL else PositionAction.CLOSE
         return PositionAction.OPEN
 
+    def get_position_close_limit(self, side: TradeType) -> Decimal:
+        if side == TradeType.BUY:
+            # get only the amount of the position that is in the direction of the trade to be closed
+            return self.get_base_amount()
+        return -self.get_base_amount()
 
     def create_order_candidates_for_budget_check(self, proposal: Proposal):
         order_candidates = []
 
         is_maker = True
         position_close = self.get_position_action(TradeType.BUY) == PositionAction.CLOSE
-        if position_close and self.direction == Direction.LONG:
-            proposal.buys = []
+        if position_close:
+            max_size = self.get_position_close_limit(TradeType.BUY)
+            for buy in proposal.buys:
+                if buy.size > max_size:
+                    buy.size = max_size
+                    max_size = 0
+                    continue
+                max_size -= buy.size
         order_candidates.extend(
             [
                 PerpetualOrderCandidate(
@@ -1077,6 +1092,14 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
             ]
         )
         position_close = self.get_position_action(TradeType.SELL) == PositionAction.CLOSE
+        if position_close:
+            max_size = self.get_position_close_limit(TradeType.SELL)
+            for sell in proposal.sells:
+                if sell.size > max_size:
+                    sell.size = max_size
+                    max_size = 0
+                    continue
+                max_size -= sell.size
         order_candidates.extend(
             [
                 PerpetualOrderCandidate(
