@@ -1071,7 +1071,6 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         position_close = self.get_position_action(TradeType.BUY) == PositionAction.CLOSE
         if position_close:
             max_size = self.get_position_close_limit(TradeType.BUY)
-            print(f"max_size: {max_size} position side: {TradeType.BUY}")
             for buy in proposal.buys:
                 if buy.size > max_size:
                     buy.size = max_size
@@ -1096,7 +1095,6 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         position_close = self.get_position_action(TradeType.SELL) == PositionAction.CLOSE
         if position_close:
             max_size = self.get_position_close_limit(TradeType.SELL)
-            print(f"max_size: {max_size} position side: {TradeType.SELL}")
             for sell in proposal.sells:
                 if sell.size > max_size:
                     sell.size = max_size
@@ -1407,7 +1405,6 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
                 self.logger().info(
                     f"({self.trading_pair}) Creating {len(proposal.buys)} bid orders "
                     f"at (Size, Price): {price_quote_str}"
-                    f"position_action: {self.get_position_action(TradeType.BUY)}"
                 )
             for idx, buy in enumerate(proposal.buys):
                 bid_order_id = self.c_buy_with_specific_market(
@@ -1432,7 +1429,6 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
                 self.logger().info(
                     f"({self.trading_pair}) Creating {len(proposal.sells)} ask "
                     f"orders at (Size, Price): {price_quote_str}"
-                    f"position_action: {self.get_position_action(TradeType.SELL)}"
                 )
             for idx, sell in enumerate(proposal.sells):
                 ask_order_id = self.c_sell_with_specific_market(
