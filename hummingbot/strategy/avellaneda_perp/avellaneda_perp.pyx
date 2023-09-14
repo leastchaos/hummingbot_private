@@ -658,6 +658,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         volatility_pct = self._avg_vol.current_value / float(self.get_price()) * 100.0
         if all((self.gamma, self._alpha, self._kappa, not isnan(volatility_pct))):
             lines.extend(["", f"  Strategy parameters:",
+                          f"    q = {self.c_get_q_ratio():.3f}",
                           f"    risk_factor(\u03B3)= {self.gamma:.5E}",
                           f"    order_book_intensity_factor(\u0391)= {self._alpha:.5E}",
                           f"    order_book_depth_factor(\u03BA)= {self._kappa:.5E}",
@@ -829,13 +830,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
     def measure_order_book_liquidity(self):
         return self.c_measure_order_book_liquidity()
 
-    cdef c_calculate_reservation_price_and_optimal_spread(self):
-        cdef:
-            ExchangeBase market = self._market_info.market
-
-        # Current mid price
-        price = self.get_price()
-
+    cdef object c_get_q_ratio(self):
         # The amount of stocks owned - q - has to be in relative units, not absolute, because changing the portfolio size shouldn't change the reservation price
         # The reservation price should concern itself only with the strategy performance, i.e. amount of stocks relative to the target
         inventory = Decimal(str(self.c_calculate_inventory()))
@@ -844,6 +839,15 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
 
         q_target = Decimal(str(self.c_calculate_target_inventory()))
         q = (self.get_base_amount() - q_target) / (inventory)
+        return q
+
+    cdef c_calculate_reservation_price_and_optimal_spread(self):
+        cdef:
+            ExchangeBase market = self._market_info.market
+
+        # Current mid price
+        price = self.get_price()
+        q = self.c_get_q_ratio()
         # Volatility has to be in absolute values (prices) because in calculation of reservation price it's not multiplied by the current price, therefore
         # it can't be a percentage. The result of the multiplication has to be an absolute price value because it's being subtracted from the current price
         vol = self.get_volatility()
@@ -902,20 +906,13 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         cdef:
             ExchangeBase market = self._market_info.market
             str trading_pair = self._market_info.trading_pair
-            str base_asset = self._market_info.base_asset
-            str quote_asset = self._market_info.quote_asset
-            object mid_price
-            object base_value
             object inventory_value
             object target_inventory_value
 
         price = self.get_price()
-        base_asset_amount = self.get_base_amount()
-        # Base asset value in quote asset prices
-        base_value = base_asset_amount * price
-        quote_asset_amount = self.get_quote_amount()
-        # Total inventory value in quote asset prices
-        inventory_value = base_value + quote_asset_amount
+        # Total inventory value in quote asset prices 
+        # in perpetual market, the total quote is the total account value
+        inventory_value = self.get_quote_amount()
         # Target base asset value in quote asset prices
         target_inventory_value = inventory_value * self.inventory_target_base
         # Target base asset amount
@@ -927,22 +924,12 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
 
     cdef c_calculate_inventory(self):
         cdef:
-            ExchangeBase market = self._market_info.market
-            str base_asset = self._market_info.base_asset
-            str quote_asset = self._market_info.quote_asset
-            object mid_price
-            object base_value
-            object inventory_value
             object inventory_value_quote
             object inventory_value_base
 
         price = self.get_price()
-        base_asset_amount = self.get_base_amount()
-        quote_asset_amount = self.get_quote_amount()
-        # Base asset value in quote asset prices
-        base_value = base_asset_amount * price
         # Total inventory value in quote asset prices
-        inventory_value_quote = base_value + quote_asset_amount
+        inventory_value_quote = self.get_quote_amount()
         # Total inventory value in base asset prices
         inventory_value_base = inventory_value_quote / price
         return inventory_value_base
@@ -1199,15 +1186,8 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
             # eta parameter is described in the paper as the shape parameter for having exponentially decreasing order amount
             # for orders that go against inventory target (i.e. Want to buy when excess inventory or sell when deficit inventory)
 
-            # q cannot be in absolute values - cannot be dependent on the size of the inventory or amount of base asset
-            # because it's a scaling factor
-            inventory = Decimal(str(self.c_calculate_inventory()))
 
-            if inventory == 0:
-                return
-
-            q_target = Decimal(str(self.c_calculate_target_inventory()))
-            q = (self.get_base_amount() - q_target) / (inventory)
+            q = self.c_get_q_ratio()
 
             if len(proposal.buys) > 0:
                 if q > 0:
@@ -1232,7 +1212,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
             fee = build_perpetual_trade_fee(
                 self.exchange_name,
                 True,
-                PositionAction.OPEN,
+                self.get_position_action(TradeType.BUY),
                 self.base_asset, 
                 self.quote_asset,
                 self._limit_order_type,
@@ -1246,7 +1226,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
             fee = build_perpetual_trade_fee(
                 self.exchange_name,
                 True,
-                PositionAction.CLOSE,
+                self.get_position_action(TradeType.BUY),
                 self.base_asset, 
                 self.quote_asset,
                 self._limit_order_type,
@@ -1409,6 +1389,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
                 self.logger().info(
                     f"({self.trading_pair}) Creating {len(proposal.buys)} bid orders "
                     f"at (Size, Price): {price_quote_str}"
+                    f"position_action: {self.get_position_action(TradeType.BUY)}"
                 )
             for idx, buy in enumerate(proposal.buys):
                 bid_order_id = self.c_buy_with_specific_market(
@@ -1433,6 +1414,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
                 self.logger().info(
                     f"({self.trading_pair}) Creating {len(proposal.sells)} ask "
                     f"orders at (Size, Price): {price_quote_str}"
+                    f"position_action: {self.get_position_action(TradeType.SELL)}"
                 )
             for idx, sell in enumerate(proposal.sells):
                 ask_order_id = self.c_sell_with_specific_market(
