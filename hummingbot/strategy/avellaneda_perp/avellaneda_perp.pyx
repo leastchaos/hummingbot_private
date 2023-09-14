@@ -793,11 +793,6 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         price = self.get_price()
         self._avg_vol.add_sample(price)
         self._trading_intensity.calculate(timestamp)
-        # seems unnecessary for below calculation
-        # # Calculate adjustment factor to have 0.01% of inventory resolution
-        # base_balance = self.get_base_amount()
-        # quote_balance = self.get_quote_amount()
-        # inventory_in_base = quote_balance / price + base_balance
 
     def collect_market_variables(self, timestamp: float):
         self.c_collect_market_variables(timestamp)
@@ -809,12 +804,11 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
 
         return market.c_get_price(trading_pair, True) - market.c_get_price(trading_pair, False)
 
-    def get_spread(self):
+    def get_spread(self) -> float:
         return self.c_get_spread()
 
-    def get_volatility(self):
-        vol = Decimal(str(self._avg_vol.current_value))
-        return vol
+    def get_volatility(self) -> Decimal:
+        return Decimal(str(self._avg_vol.current_value))
 
     cdef c_measure_order_book_liquidity(self):
 
@@ -1185,8 +1179,6 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         if (self.order_override is None) or (len(self.order_override) == 0):
             # eta parameter is described in the paper as the shape parameter for having exponentially decreasing order amount
             # for orders that go against inventory target (i.e. Want to buy when excess inventory or sell when deficit inventory)
-
-
             q = self.c_get_q_ratio()
 
             if len(proposal.buys) > 0:
