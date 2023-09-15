@@ -1090,6 +1090,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
                     position_close=position_close,
                 )
                 for buy in proposal.buys
+                if buy.size > 0
             ]
         )
         position_close = self.get_position_action(TradeType.SELL) == PositionAction.CLOSE
@@ -1114,6 +1115,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
                     position_close=position_close,
                 )
                 for sell in proposal.sells
+                if sell.size > 0
             ]
         )
         return order_candidates
