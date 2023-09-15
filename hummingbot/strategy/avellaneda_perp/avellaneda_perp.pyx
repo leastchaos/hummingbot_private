@@ -497,11 +497,11 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
                 position.amount
                 for position in positions
                 if position.position_side == PositionSide.BOTH])
-            short_sum = - sum([
+            short_sum = - abs(sum([
                     position.amount
                     for position in positions
                     if position.position_side == PositionSide.SHORT
-                ])
+                ]))
             return both_sum + short_sum
         return sum([
             position.amount
@@ -523,7 +523,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         base_value = base_balance * float(price)
         total_in_quote = base_value + quote_balance
         base_ratio = base_value / total_in_quote if total_in_quote > 0 else 0
-        quote_ratio = quote_balance / total_in_quote if total_in_quote > 0 else 0
+        quote_ratio = 1 - abs(base_value / total_in_quote) if total_in_quote > 0 else 0
         data = [
             ["", base_asset, quote_asset],
             ["Total Balance", round(base_balance, 4), round(quote_balance, 4)],
