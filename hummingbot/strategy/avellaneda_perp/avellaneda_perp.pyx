@@ -1242,7 +1242,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
             fee = build_perpetual_trade_fee(
                 self.exchange_name,
                 True,
-                self.get_position_action(TradeType.BUY),
+                self.get_position_action(TradeType.SELL),
                 self.base_asset, 
                 self.quote_asset,
                 self._limit_order_type,
