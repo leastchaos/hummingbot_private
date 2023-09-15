@@ -1090,7 +1090,6 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
                     position_close=position_close,
                 )
                 for buy in proposal.buys
-                if buy.size > 0
             ]
         )
         position_close = self.get_position_action(TradeType.SELL) == PositionAction.CLOSE
@@ -1115,7 +1114,6 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
                     position_close=position_close,
                 )
                 for sell in proposal.sells
-                if sell.size > 0
             ]
         )
         return order_candidates
@@ -1126,12 +1124,13 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         for order in chain(proposal.buys, proposal.sells):
             adjusted_candidate = adjusted_candidates.pop(0)
             if adjusted_candidate.amount == s_decimal_zero:
-                self.logger().info(
-                    f"Insufficient balance: {adjusted_candidate.order_side.name} order (price: {order.price},"
-                    f" size: {order.size}) is omitted."
-                )
-                self.logger().warning(
-                    "You are also at a possible risk of being liquidated if there happens to be an open loss.")
+                # the log info are invalid because the order size may be 0 due to direction selected
+                # self.logger().info(
+                #     f"Insufficient balance: {adjusted_candidate.order_side.name} order (price: {order.price},"
+                #     f" size: {order.size}) is omitted."
+                # )
+                # self.logger().warning(
+                #     "You are also at a possible risk of being liquidated if there happens to be an open loss.")
                 order.size = s_decimal_zero
         proposal.buys = [o for o in proposal.buys if o.size > 0]
         proposal.sells = [o for o in proposal.sells if o.size > 0]
