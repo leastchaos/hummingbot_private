@@ -1074,7 +1074,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
             for buy in proposal.buys:
                 if buy.size > max_size:
                     buy.size = max_size
-                    max_size = 0
+                    max_size = s_decimal_zero
                     continue
                 max_size -= buy.size
         order_candidates.extend(
@@ -1098,7 +1098,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
             for sell in proposal.sells:
                 if sell.size > max_size:
                     sell.size = max_size
-                    max_size = 0
+                    max_size = s_decimal_zero
                     continue
                 max_size -= sell.size
         order_candidates.extend(
