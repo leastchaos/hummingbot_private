@@ -198,7 +198,7 @@ class PerpTradingStrategyConfigMap(BaseTradingStrategyConfigMap):
         default="BOTH",
         description="The direction to use for the market. [LONG, SHORT, BOTH]",
         client_data=ClientFieldData(
-            prompt=lambda mi: "Enter the direction to use for the market, LONG, SHORT or BOTH",
+            prompt=lambda mi: "Enter the direction to use for the market, LONG, SHORT or BOTH. (BOTH only works with ONEWAY mode)",
             prompt_on_new=True,
         ),
     )
@@ -331,7 +331,7 @@ class AvellanedaPerpConfigMap(PerpTradingStrategyConfigMap):
         ge=-100,
         le=100,
         client_data=ClientFieldData(
-            prompt=lambda mi: "What is the inventory target for the base asset? Enter 50 for 50%",
+            prompt=lambda mi: "What is the inventory target for the base asset? Use negative to target short positions. Enter 50 for 50%, -50% for -50%",
             prompt_on_new=True,
         ),
     )
