@@ -5,13 +5,15 @@ import time
 from decimal import Decimal
 from math import ceil, floor, isnan
 from typing import Dict, List, Tuple, Union
-
+from enum import Enum
+from itertools import chain
 import numpy as np
 import pandas as pd
 
 from hummingbot.connector.exchange_base import ExchangeBase
 from hummingbot.connector.exchange_base cimport ExchangeBase
 from hummingbot.core.clock cimport Clock
+from hummingbot.core.data_type.order_candidate import PerpetualOrderCandidate
 
 from hummingbot.client.config.config_helpers import ClientConfigAdapter
 from hummingbot.core.data_type.common import (
@@ -60,6 +62,10 @@ s_decimal_neg_one = Decimal(-1)
 s_decimal_one = Decimal(1)
 pmm_logger = None
 
+class Direction(Enum):
+    LONG = "LONG"
+    SHORT = "SHORT"
+    BOTH = "BOTH"
 
 cdef class AvellanedaPerpStrategy(StrategyBase):
     OPTION_LOG_CREATE_ORDER = 1 << 3
@@ -85,6 +91,8 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
                     ):
         self._sb_order_tracker = OrderTracker()
         self._config_map = config_map
+        if self.direction == Direction.BOTH and self.position_mode != PositionMode.ONEWAY:
+            raise ValueError("Direction BOTH can only be used with oneway position mode.")
         self._market_info = market_info
         self._price_delegate = OrderBookAssetPriceDelegate(market_info.market, market_info.trading_pair)
         self._hb_app_notification = hb_app_notification
@@ -143,6 +151,15 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
     @property
     def avg_vol(self):
         return self._avg_vol
+
+    @property
+    def direction(self) -> Direction:
+        if self._config_map.direction == "LONG":
+            return Direction.LONG
+        elif self._config_map.direction == "SHORT":
+            return Direction.SHORT
+        elif self._config_map.direction == "BOTH":
+            return Direction.BOTH
 
     @avg_vol.setter
     def avg_vol(self, indicator: InstantVolatilityIndicator):
@@ -235,11 +252,11 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         return self._market_info.trading_pair
 
     @property
-    def gamma(self):
+    def gamma(self) -> Decimal:
         return self._config_map.risk_factor
 
     @property
-    def alpha(self):
+    def alpha(self) -> Decimal:
         return self._alpha
 
     @alpha.setter
@@ -247,7 +264,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         self._alpha = value
 
     @property
-    def kappa(self):
+    def kappa(self) -> Decimal:
         return self._kappa
 
     @kappa.setter
@@ -255,11 +272,11 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         self._kappa = value
 
     @property
-    def eta(self):
+    def eta(self) -> Decimal:
         return self._config_map.order_amount_shape_factor
 
     @property
-    def reservation_price(self):
+    def reservation_price(self) -> Decimal:
         return self._reservation_price
 
     @reservation_price.setter
@@ -267,11 +284,11 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         self._reservation_price = value
 
     @property
-    def optimal_spread(self):
+    def optimal_spread(self) -> Decimal:
         return self._optimal_spread
 
     @property
-    def optimal_ask(self):
+    def optimal_ask(self) -> Decimal:
         return self._optimal_ask
 
     @optimal_ask.setter
@@ -279,7 +296,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         self._optimal_ask = value
 
     @property
-    def optimal_bid(self):
+    def optimal_bid(self) -> Decimal:
         return self._optimal_bid
 
     @optimal_bid.setter
@@ -318,13 +335,13 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
             return PositionMode.ONEWAY
         raise ValueError(f"Invalid position mode {self._config_map.position_mode}")
 
-    def get_price(self) -> float:
+    def get_price(self) -> Decimal:
         return self.get_mid_price()
 
-    def get_last_price(self) -> float:
+    def get_last_price(self) -> Decimal:
         return self._market_info.get_last_price()
 
-    def get_mid_price(self) -> float:
+    def get_mid_price(self) -> Decimal:
         return self.c_get_mid_price()
 
     cdef object c_get_mid_price(self):
@@ -461,32 +478,10 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         :param market_pair: The market pair to get the value of the derivative base asset.
         :return: The value of the derivative base asset.
         """
-        active_base_orders = self.active_sells
-        sell_amount = sum([order.quantity for order in active_base_orders])
-        return self.get_base_amount() - sell_amount
+        # for future, available amount to sell depends on quote balance
+        return self.get_quote_available_amount() / self.get_price()
 
-
-    def get_binance_perp_quote_available_amount(self) -> Decimal:
-        """Due to available balance bug for binance_perpetual, we need to use total balance, position and open orders to calculate available amount"""
-        trading_pair = self.trading_pair
-        amount = self.get_quote_amount()
-        positions: List[Position] = [
-            position
-            for position in self.market_info.market.account_positions.values()
-            if not isinstance(position, PositionMode) and position.trading_pair == trading_pair
-        ]
-        for position in positions:
-            if position.position_side in [PositionSide.LONG, PositionSide.BOTH]:
-                amount -= position.amount * position.entry_price
-
-        for order in self.active_buys:
-            amount -= order.quantity * order.price
-        return amount
     def get_quote_available_amount(self) -> Decimal:
-        """Due to available balance bug for binance_perpetual, we need to use total balance, position and open orders to calculate available amount"""
-        # if self.exchange_name == "binance_perpetual":
-        #     return self.get_binance_perp_quote_available_amount()
-        
         return self.market_info.market.get_available_balance(self.market_info.quote_asset) * self.leverage
 
 
@@ -497,15 +492,23 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
             for position in self.market_info.market.account_positions.values()
             if not isinstance(position, PositionMode) and position.trading_pair == trading_pair
         ]
-        amount = 0
+        if self.direction == Direction.SHORT:
+            both_sum = sum([
+                position.amount
+                for position in positions
+                if position.position_side == PositionSide.BOTH])
+            short_sum = - sum([
+                    position.amount
+                    for position in positions
+                    if position.position_side == PositionSide.SHORT
+                ])
+            return both_sum + short_sum
+        return sum([
+            position.amount
+            for position in positions
+            if position.position_side == PositionSide.LONG or position.position_side == PositionSide.BOTH
+        ])
 
-        for position in positions:
-            if position.position_side in [PositionSide.LONG, PositionSide.BOTH]:
-                amount += position.amount
-            # ignore short position as it is not considered for this strategy
-            # if position.position_side == PositionSide.SHORT:
-            #     amount -= abs(position.amount)
-        return amount
 
     def get_quote_amount(self) -> Decimal:
         return self.market_info.market.get_balance(self.market_info.quote_asset) * self.leverage
@@ -659,10 +662,12 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         volatility_pct = self._avg_vol.current_value / float(self.get_price()) * 100.0
         if all((self.gamma, self._alpha, self._kappa, not isnan(volatility_pct))):
             lines.extend(["", f"  Strategy parameters:",
+                          f"    q = {self.c_get_q_ratio():.3f}",
                           f"    risk_factor(\u03B3)= {self.gamma:.5E}",
                           f"    order_book_intensity_factor(\u0391)= {self._alpha:.5E}",
                           f"    order_book_depth_factor(\u03BA)= {self._kappa:.5E}",
-                          f"    volatility= {volatility_pct:.3f}%"])
+                          f"    volatility= {volatility_pct:.3f}%"]
+                          )
             if self._execution_state.time_left is not None:
                 lines.extend([f"    time until end of trading cycle = {str(datetime.timedelta(seconds=float(self._execution_state.time_left)//1e3))}"])
             else:
@@ -698,6 +703,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
 
         self._execution_state.time_left = self._execution_state.closing_time
         self.market_info.market.set_leverage(self.trading_pair, self.leverage)
+        self.logger().info("Setting position mode to %s" % self.position_mode)
         self.market_info.market.set_position_mode(self.position_mode)
 
     def start(self, clock: Clock, timestamp: float):
@@ -774,7 +780,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
                 # 5. Apply functions that modify orders price
                 self.c_apply_order_price_modifiers(proposal)
                 # 6. Apply budget constraint, i.e. can't buy/sell more than what you have.
-                self.c_apply_budget_constraint(proposal)
+                self.apply_budget_constraint(proposal)
 
                 self.c_cancel_active_orders(proposal)
 
@@ -791,10 +797,6 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         price = self.get_price()
         self._avg_vol.add_sample(price)
         self._trading_intensity.calculate(timestamp)
-        # Calculate adjustment factor to have 0.01% of inventory resolution
-        base_balance = self.get_base_amount()
-        quote_balance = self.get_quote_amount()
-        inventory_in_base = quote_balance / price + base_balance
 
     def collect_market_variables(self, timestamp: float):
         self.c_collect_market_variables(timestamp)
@@ -806,12 +808,11 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
 
         return market.c_get_price(trading_pair, True) - market.c_get_price(trading_pair, False)
 
-    def get_spread(self):
+    def get_spread(self) -> float:
         return self.c_get_spread()
 
-    def get_volatility(self):
-        vol = Decimal(str(self._avg_vol.current_value))
-        return vol
+    def get_volatility(self) -> Decimal:
+        return Decimal(str(self._avg_vol.current_value))
 
     cdef c_measure_order_book_liquidity(self):
 
@@ -827,13 +828,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
     def measure_order_book_liquidity(self):
         return self.c_measure_order_book_liquidity()
 
-    cdef c_calculate_reservation_price_and_optimal_spread(self):
-        cdef:
-            ExchangeBase market = self._market_info.market
-
-        # Current mid price
-        price = self.get_price()
-
+    cdef object c_get_q_ratio(self):
         # The amount of stocks owned - q - has to be in relative units, not absolute, because changing the portfolio size shouldn't change the reservation price
         # The reservation price should concern itself only with the strategy performance, i.e. amount of stocks relative to the target
         inventory = Decimal(str(self.c_calculate_inventory()))
@@ -842,6 +837,15 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
 
         q_target = Decimal(str(self.c_calculate_target_inventory()))
         q = (self.get_base_amount() - q_target) / (inventory)
+        return q
+
+    cdef c_calculate_reservation_price_and_optimal_spread(self):
+        cdef:
+            ExchangeBase market = self._market_info.market
+
+        # Current mid price
+        price = self.get_price()
+        q = self.c_get_q_ratio()
         # Volatility has to be in absolute values (prices) because in calculation of reservation price it's not multiplied by the current price, therefore
         # it can't be a percentage. The result of the multiplication has to be an absolute price value because it's being subtracted from the current price
         vol = self.get_volatility()
@@ -900,20 +904,13 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         cdef:
             ExchangeBase market = self._market_info.market
             str trading_pair = self._market_info.trading_pair
-            str base_asset = self._market_info.base_asset
-            str quote_asset = self._market_info.quote_asset
-            object mid_price
-            object base_value
             object inventory_value
             object target_inventory_value
 
         price = self.get_price()
-        base_asset_amount = self.get_base_amount()
-        quote_asset_amount = self.get_quote_amount()
-        # Base asset value in quote asset prices
-        base_value = base_asset_amount * price
-        # Total inventory value in quote asset prices
-        inventory_value = base_value + quote_asset_amount
+        # Total inventory value in quote asset prices 
+        # in perpetual market, the total quote is the total account value
+        inventory_value = self.get_quote_amount()
         # Target base asset value in quote asset prices
         target_inventory_value = inventory_value * self.inventory_target_base
         # Target base asset amount
@@ -925,22 +922,12 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
 
     cdef c_calculate_inventory(self):
         cdef:
-            ExchangeBase market = self._market_info.market
-            str base_asset = self._market_info.base_asset
-            str quote_asset = self._market_info.quote_asset
-            object mid_price
-            object base_value
-            object inventory_value
             object inventory_value_quote
             object inventory_value_base
 
         price = self.get_price()
-        base_asset_amount = self.get_base_amount()
-        quote_asset_amount = self.get_quote_amount()
-        # Base asset value in quote asset prices
-        base_value = base_asset_amount * price
         # Total inventory value in quote asset prices
-        inventory_value_quote = base_value + quote_asset_amount
+        inventory_value_quote = self.get_quote_amount()
         # Total inventory value in base asset prices
         inventory_value_base = inventory_value_quote / price
         return inventory_value_base
@@ -1053,27 +1040,6 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
     def create_base_proposal(self):
         return self.c_create_base_proposal()
 
-    cdef tuple c_get_adjusted_available_balance(self, list orders):
-        """
-        Calculates the available balance, plus the amount attributed to orders.
-        :return: (base amount, quote amount) in Decimal
-        """
-        cdef:
-            ExchangeBase market = self._market_info.market
-            object base_balance = self.get_base_available_amount()
-            object quote_balance = self.get_quote_available_amount()
-
-        for order in orders:
-            if order.is_buy:
-                quote_balance += order.quantity * order.price
-            else:
-                base_balance += order.quantity
-
-        return base_balance, quote_balance
-
-    def get_adjusted_available_balance(self, orders: List[LimitOrder]):
-        return self.c_get_adjusted_available_balance(orders)
-
     cdef c_apply_order_price_modifiers(self, object proposal):
         if self._config_map.order_optimization_enabled:
             self.c_apply_order_optimization(proposal)
@@ -1084,71 +1050,97 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
     def apply_order_price_modifiers(self, proposal: Proposal):
         self.c_apply_order_price_modifiers(proposal)
 
-    def apply_budget_constraint(self, proposal: Proposal):
-        return self.c_apply_budget_constraint(proposal)
+    def get_position_action(self, side: TradeType) -> PositionAction:
+        if self.direction == Direction.LONG:
+            return PositionAction.CLOSE if side == TradeType.SELL else PositionAction.OPEN
+        if self.direction == Direction.SHORT:
+            return PositionAction.OPEN if side == TradeType.SELL else PositionAction.CLOSE
+        return PositionAction.OPEN
 
-    def adjusted_available_balance_for_orders_budget_constrain(self):
-        candidate_hanging_orders = self.hanging_orders_tracker.candidate_hanging_orders_from_pairs()
-        non_hanging = []
-        if self.market_info in self._sb_order_tracker.get_limit_orders():
-            all_orders = self._sb_order_tracker.get_limit_orders()[self.market_info].values()
-            non_hanging = [order for order in all_orders
-                           if not self._hanging_orders_tracker.is_order_id_in_hanging_orders(order.client_order_id)]
-        all_non_hanging_orders = list(set(non_hanging) - set(candidate_hanging_orders))
-        return self.c_get_adjusted_available_balance(all_non_hanging_orders)
+    def get_position_close_limit(self, side: TradeType) -> Decimal:
+        if side == TradeType.BUY:
+            # get only the amount of the position that is in the direction of the trade to be closed
+            # position close for buy is for short side, hence the negative sign
+            return -self.get_base_amount()
+        return self.get_base_amount()
 
-    cdef c_apply_budget_constraint(self, object proposal):
-        cdef:
-            ExchangeBase market = self._market_info.market
-            object quote_size
-            object base_size
-            object adjusted_amount
+    def create_order_candidates_for_budget_check(self, proposal: Proposal):
+        order_candidates = []
 
-        base_balance, quote_balance = self.adjusted_available_balance_for_orders_budget_constrain()
+        is_maker = True
+        position_close = self.get_position_action(TradeType.BUY) == PositionAction.CLOSE
+        if position_close:
+            max_size = self.get_position_close_limit(TradeType.BUY)
+            for buy in proposal.buys:
+                if buy.size > max_size:
+                    buy.size = max_size
+                    max_size = 0
+                    continue
+                max_size -= buy.size
+        order_candidates.extend(
+            [
+                PerpetualOrderCandidate(
+                    self.trading_pair,
+                    is_maker,
+                    OrderType.LIMIT,
+                    TradeType.BUY,
+                    buy.size,
+                    buy.price,
+                    leverage=Decimal(self.leverage),
+                    position_close=position_close,
+                )
+                for buy in proposal.buys
+            ]
+        )
+        position_close = self.get_position_action(TradeType.SELL) == PositionAction.CLOSE
+        if position_close:
+            max_size = self.get_position_close_limit(TradeType.SELL)
+            for sell in proposal.sells:
+                if sell.size > max_size:
+                    sell.size = max_size
+                    max_size = 0
+                    continue
+                max_size -= sell.size
+        order_candidates.extend(
+            [
+                PerpetualOrderCandidate(
+                    self.trading_pair,
+                    is_maker,
+                    OrderType.LIMIT,
+                    TradeType.SELL,
+                    sell.size,
+                    sell.price,
+                    leverage=Decimal(self.leverage),
+                    position_close=position_close,
+                )
+                for sell in proposal.sells
+            ]
+        )
+        return order_candidates
 
-        for buy in proposal.buys:
-            buy_fee = build_perpetual_trade_fee(
-                self.exchange_name,
-                True,
-                PositionAction.OPEN,
-                self.base_asset, 
-                self.quote_asset,
-                self._limit_order_type,
-                TradeType.BUY,
-                buy.size,
-                buy.price)
-            quote_size = buy.size * buy.price * (Decimal(1) + buy_fee.percent)
-
-            # Adjust buy order size to use remaining balance if less than the order amount
-            if quote_balance < quote_size:
-                adjusted_amount = quote_balance / (buy.price)# * (Decimal("1") + buy_fee.percent))
-                adjusted_amount = market.c_quantize_order_amount(self.trading_pair, adjusted_amount)
-                buy.size = adjusted_amount
-                quote_balance = s_decimal_zero
-            elif quote_balance == s_decimal_zero:
-                buy.size = s_decimal_zero
-            else:
-                quote_balance -= quote_size
-
+    def apply_adjusted_order_candidates_to_proposal(self,
+                                                    adjusted_candidates: List[PerpetualOrderCandidate],
+                                                    proposal: Proposal):
+        for order in chain(proposal.buys, proposal.sells):
+            adjusted_candidate = adjusted_candidates.pop(0)
+            if adjusted_candidate.amount == s_decimal_zero:
+                # the log info are invalid because the order size may be 0 due to direction selected
+                # self.logger().info(
+                #     f"Insufficient balance: {adjusted_candidate.order_side.name} order (price: {order.price},"
+                #     f" size: {order.size}) is omitted."
+                # )
+                # self.logger().warning(
+                #     "You are also at a possible risk of being liquidated if there happens to be an open loss.")
+                order.size = s_decimal_zero
         proposal.buys = [o for o in proposal.buys if o.size > 0]
-
-        for sell in proposal.sells:
-            base_size = sell.size
-
-            # Adjust sell order size to use remaining balance if less than the order amount
-            if base_balance < base_size:
-                adjusted_amount = market.c_quantize_order_amount(self.trading_pair, base_balance)
-                sell.size = adjusted_amount
-                base_balance = s_decimal_zero
-            elif base_balance == s_decimal_zero:
-                sell.size = s_decimal_zero
-            else:
-                base_balance -= base_size
-
         proposal.sells = [o for o in proposal.sells if o.size > 0]
 
     def apply_budget_constraint(self, proposal: Proposal):
-        return self.c_apply_budget_constraint(proposal)
+        checker = self._market_info.market.budget_checker
+
+        order_candidates = self.create_order_candidates_for_budget_check(proposal)
+        adjusted_candidates = checker.adjust_candidates(order_candidates, all_or_none=True)
+        self.apply_adjusted_order_candidates_to_proposal(adjusted_candidates, proposal)
 
     # Compare the market price with the top bid and top ask price
     cdef c_apply_order_optimization(self, object proposal):
@@ -1212,16 +1204,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         if (self.order_override is None) or (len(self.order_override) == 0):
             # eta parameter is described in the paper as the shape parameter for having exponentially decreasing order amount
             # for orders that go against inventory target (i.e. Want to buy when excess inventory or sell when deficit inventory)
-
-            # q cannot be in absolute values - cannot be dependent on the size of the inventory or amount of base asset
-            # because it's a scaling factor
-            inventory = Decimal(str(self.c_calculate_inventory()))
-
-            if inventory == 0:
-                return
-
-            q_target = Decimal(str(self.c_calculate_target_inventory()))
-            q = (self.get_base_amount() - q_target) / (inventory)
+            q = self.c_get_q_ratio()
 
             if len(proposal.buys) > 0:
                 if q > 0:
@@ -1246,7 +1229,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
             fee = build_perpetual_trade_fee(
                 self.exchange_name,
                 True,
-                PositionAction.OPEN,
+                self.get_position_action(TradeType.BUY),
                 self.base_asset, 
                 self.quote_asset,
                 self._limit_order_type,
@@ -1260,7 +1243,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
             fee = build_perpetual_trade_fee(
                 self.exchange_name,
                 True,
-                PositionAction.CLOSE,
+                self.get_position_action(TradeType.SELL),
                 self.base_asset, 
                 self.quote_asset,
                 self._limit_order_type,
@@ -1415,7 +1398,6 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
             bint orders_created = False
         # Number of pair of orders to track for hanging orders
         number_of_pairs = min((len(proposal.buys), len(proposal.sells))) if self._hanging_orders_enabled else 0
-
         if len(proposal.buys) > 0:
             if self._logging_options & self.OPTION_LOG_CREATE_ORDER:
                 price_quote_str = [f"{buy.size.normalize()} {self.base_asset}, "
@@ -1432,7 +1414,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
                     order_type=self._limit_order_type,
                     price=buy.price,
                     expiration_seconds=expiration_seconds,
-                    position_action=PositionAction.OPEN,
+                    position_action=self.get_position_action(TradeType.BUY),
                 )
                 orders_created = True
                 if idx < number_of_pairs:
@@ -1449,7 +1431,6 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
                     f"({self.trading_pair}) Creating {len(proposal.sells)} ask "
                     f"orders at (Size, Price): {price_quote_str}"
                 )
-            position_action = PositionAction.CLOSE if self.position_mode == PositionMode.HEDGE else PositionAction.OPEN
             for idx, sell in enumerate(proposal.sells):
                 ask_order_id = self.c_sell_with_specific_market(
                     self._market_info,
@@ -1457,7 +1438,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
                     order_type=self._limit_order_type,
                     price=sell.price,
                     expiration_seconds=expiration_seconds,
-                    position_action=position_action,
+                    position_action=self.get_position_action(TradeType.SELL),
                 )
                 orders_created = True
                 if idx < number_of_pairs:

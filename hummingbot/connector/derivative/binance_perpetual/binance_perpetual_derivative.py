@@ -62,6 +62,7 @@ class BinancePerpetualDerivative(PerpetualDerivativePyBase):
         self._position_mode = None
         self._last_trade_history_timestamp = None
         super().__init__(client_config_map)
+        self._perpetual_trading.set_position_mode(None)
 
     @property
     def name(self) -> str:
@@ -743,7 +744,7 @@ class BinancePerpetualDerivative(PerpetualDerivativePyBase):
                 return_err=True
             )
             self._position_mode = PositionMode.HEDGE if response["dualSidePosition"] else PositionMode.ONEWAY
-
+            self._perpetual_trading.set_position_mode(self._position_mode)
         return self._position_mode
 
     async def _trading_pair_position_mode_set(self, mode: PositionMode, trading_pair: str) -> Tuple[bool, str]:
