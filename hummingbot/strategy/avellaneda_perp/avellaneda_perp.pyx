@@ -579,6 +579,8 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         markets_columns = ["Exchange", "Market", "Best Bid", "Best Ask", f"MidPrice"]
         markets_columns.append('Reservation Price')
         markets_columns.append('Optimal Spread')
+        markets_columns.append('Optimal Bid')
+        markets_columns.append('Optimal Ask')
         market_books = [(self._market_info.market, self._market_info.trading_pair)]
         for market, trading_pair in market_books:
             bid_price = market.get_price(trading_pair, False)
@@ -590,8 +592,10 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
                 float(bid_price),
                 float(ask_price),
                 float(ref_price),
-                round(self._reservation_price, 5),
-                round(self._optimal_spread, 5),
+                f"{self._reservation_price:.5g}",
+                f"{self._optimal_spread:.5g}",
+                f"{self._optimal_bid:.5g}",
+                f"{self._optimal_ask:.5g}"
             ])
         return pd.DataFrame(data=markets_data, columns=markets_columns).replace(np.nan, '', regex=True)
     def get_positions(self) -> List[Position]:
@@ -779,10 +783,12 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
                 self.c_apply_order_amount_eta_transformation(proposal)
                 # 5. Apply functions that modify orders price
                 self.c_apply_order_price_modifiers(proposal)
+                # 6. Cancel orders that do not meet the requirements
+                self.c_cancel_active_orders(proposal)
                 # 6. Apply budget constraint, i.e. can't buy/sell more than what you have.
                 self.apply_budget_constraint(proposal)
 
-                self.c_cancel_active_orders(proposal)
+                
 
         if self.c_to_create_orders(proposal):
             self.c_execute_orders_proposal(proposal)
