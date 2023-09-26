@@ -328,6 +328,10 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         return self._config_map.leverage
     
     @property
+    def order_refresh_max_spread(self) -> Decimal:
+        return self._config_map.order_refresh_max_spread / Decimal('100')
+
+    @property
     def position_mode(self) -> PositionMode:
         if self._config_map.position_mode == "HEDGE":
             return PositionMode.HEDGE
@@ -1328,6 +1332,8 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
             )
 
     cdef bint c_is_within_tolerance(self, list current_prices, list proposal_prices):
+        if len(current_prices) == 0:
+            return True
         if len(current_prices) != len(proposal_prices):
             return False
         current_prices = sorted(current_prices)
@@ -1335,6 +1341,16 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         for current, proposal in zip(current_prices, proposal_prices):
             # if spread diff is more than the tolerance or order quantities are different, return false.
             if abs(proposal - current) / current > self.order_refresh_tolerance:
+                self.logger().info("current price (%s) exceeded proposed price (%s) by order refresh tolerance", current, proposal)
+                return False
+        return True
+
+    cdef bint c_is_within_max_spread(self, list current_prices):
+        mid_price = self.get_price()
+        for current in current_prices:
+            # if spread diff is more than the tolerance or order quantities are different, return false.
+            if abs(mid_price - current) / current > self.order_refresh_max_spread:
+                self.logger().info("current price (%s) exceeded order max spread from mid_price (%s)", current, mid_price)
                 return False
         return True
 
@@ -1349,6 +1365,13 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
             list active_orders = self.active_non_hanging_orders
         for order in active_orders:
             if order_age(order, self._current_timestamp) > self._config_map.max_order_age:
+                self.c_cancel_order(self._market_info, order.client_order_id)
+
+    cdef c_execute_cancel_active_orders(self):
+        self._hanging_orders_tracker.update_strategy_orders_with_equivalent_orders()
+        for order in self.active_non_hanging_orders:
+            # If is about to be added to hanging_orders then don't cancel
+            if not self._hanging_orders_tracker.is_potential_hanging_order(order):
                 self.c_cancel_order(self._market_info, order.client_order_id)
 
     cdef c_cancel_active_orders(self, object proposal):
@@ -1369,15 +1392,13 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
             proposal_sells = [sell.price for sell in proposal.sells]
 
             if self.c_is_within_tolerance(active_buy_prices, proposal_buys) and \
-                    self.c_is_within_tolerance(active_sell_prices, proposal_sells):
+                    self.c_is_within_tolerance(active_sell_prices, proposal_sells) and \
+                    self.c_is_within_max_spread(active_buy_prices) and \
+                    self.c_is_within_max_spread(active_sell_prices):
                 to_defer_canceling = True
 
         if not to_defer_canceling:
-            self._hanging_orders_tracker.update_strategy_orders_with_equivalent_orders()
-            for order in self.active_non_hanging_orders:
-                # If is about to be added to hanging_orders then don't cancel
-                if not self._hanging_orders_tracker.is_potential_hanging_order(order):
-                    self.c_cancel_order(self._market_info, order.client_order_id)
+            self.c_execute_cancel_active_orders()
         else:
             self.c_set_timers()
 
