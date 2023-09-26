@@ -314,6 +314,17 @@ class AvellanedaPerpConfigMap(PerpTradingStrategyConfigMap):
             )
         ),
     )
+    order_refresh_max_spread: Decimal = Field(
+        default=Decimal("99"),
+        description=(
+            "The maximum spread allowed on refresh cycles."
+            " Orders over that range are cancelled and re-submitted."
+        ),
+        gt=0,
+        client_data=ClientFieldData(
+            prompt=lambda mi: "Enter the maximum spread allowed on refresh cycles (as % of mid price)",
+        ),
+    )
     filled_order_delay: float = Field(
         default=60.,
         description="The delay before placing a new order after an order fill.",
