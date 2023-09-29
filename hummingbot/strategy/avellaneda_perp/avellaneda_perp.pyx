@@ -787,11 +787,11 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
                 self.c_apply_order_amount_eta_transformation(proposal)
                 # 5. Apply functions that modify orders price
                 self.c_apply_order_price_modifiers(proposal)
-                # 6. Cancel orders that do not meet the requirements
-                self.c_cancel_active_orders(proposal)
+
                 # 6. Apply budget constraint, i.e. can't buy/sell more than what you have.
                 self.apply_budget_constraint(proposal)
-
+                # 6. Cancel orders that do not meet the requirements
+                self.c_cancel_active_orders(proposal)
                 
 
         if self.c_to_create_orders(proposal):
@@ -1332,8 +1332,6 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
             )
 
     cdef bint c_is_within_tolerance(self, list current_prices, list proposal_prices):
-        if len(current_prices) == 0:
-            return True
         if len(current_prices) != len(proposal_prices):
             return False
         current_prices = sorted(current_prices)
@@ -1388,8 +1386,8 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         if proposal is not None:
             active_buy_prices = [Decimal(str(o.price)) for o in self.active_non_hanging_orders if o.is_buy]
             active_sell_prices = [Decimal(str(o.price)) for o in self.active_non_hanging_orders if not o.is_buy]
-            proposal_buys = [buy.price for buy in proposal.buys]
-            proposal_sells = [sell.price for sell in proposal.sells]
+            proposal_buys = [buy.price for buy in proposal.buys if buy.size > 0]
+            proposal_sells = [sell.price for sell in proposal.sells if sell.size > 0]
 
             if self.c_is_within_tolerance(active_buy_prices, proposal_buys) and \
                     self.c_is_within_tolerance(active_sell_prices, proposal_sells) and \
