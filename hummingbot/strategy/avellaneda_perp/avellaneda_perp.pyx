@@ -1296,6 +1296,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
         self.c_did_complete_order(order_completed_event)
 
     cdef c_did_complete_order(self, object order_completed_event):
+        self.c_execute_cancel_active_orders()
         cdef:
             str order_id = order_completed_event.order_id
             LimitOrder limit_order_record = self._sb_order_tracker.c_get_limit_order(self._market_info, order_id)
