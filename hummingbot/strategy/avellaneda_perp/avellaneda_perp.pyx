@@ -1142,8 +1142,10 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
                 # self.logger().warning(
                 #     "You are also at a possible risk of being liquidated if there happens to be an open loss.")
                 order.size = s_decimal_zero
-        proposal.buys = [o for o in proposal.buys if o.size > 0]
-        proposal.sells = [o for o in proposal.sells if o.size > 0]
+        
+        min_trade_value = 6.0 #USD
+        proposal.buys = [o for o in proposal.buys if o.size > 0 and o.size * o.price > min_trade_value]
+        proposal.sells = [o for o in proposal.sells if o.size > 0 and o.size * o.price > min_trade_value]
 
     def apply_budget_constraint(self, proposal: Proposal):
         checker = self._market_info.market.budget_checker
