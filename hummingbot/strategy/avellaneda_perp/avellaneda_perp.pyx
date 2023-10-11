@@ -1143,7 +1143,7 @@ cdef class AvellanedaPerpStrategy(StrategyBase):
                 #     "You are also at a possible risk of being liquidated if there happens to be an open loss.")
                 order.size = s_decimal_zero
         
-        min_trade_value = 6.0 #USD
+        min_trade_value = Decimal("5.05") #USD
         proposal.buys = [o for o in proposal.buys if o.size > 0 and o.size * o.price > min_trade_value]
         proposal.sells = [o for o in proposal.sells if o.size > 0 and o.size * o.price > min_trade_value]
 
