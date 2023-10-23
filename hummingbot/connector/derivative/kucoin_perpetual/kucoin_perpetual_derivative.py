@@ -873,7 +873,7 @@ class KucoinPerpetualDerivative(PerpetualDerivativePyBase):
 
         success = False
         msg = ""
-        if resp["code"] == CONSTANTS.RET_CODE_OK:
+        if resp["code"] == CONSTANTS.RET_CODE_OK or resp["code"] == CONSTANTS.RET_CODE_OK_2:
             success = True
         else:
             formatted_ret_code = self._format_ret_code_for_print(resp['code'])
